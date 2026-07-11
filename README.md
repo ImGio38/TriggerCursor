@@ -48,11 +48,12 @@ You can run the application directly using the launcher scripts, which will auto
    ```
 
 2. Run the launcher for your operating system:
-   * **Linux / macOS:**
+   * **Linux:**
      ```bash
      ./run.sh
      ```
    * **Windows:**
+
      Double-click `run.bat` or run:
      ```cmd
      python run.py
