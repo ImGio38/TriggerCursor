@@ -37,7 +37,9 @@ sudo apt install cmake build-essential
 * CMake
 * Visual Studio with the "Desktop development with C++" workload active
 
-## Installation
+## How to Run
+
+You can run the application directly using the launcher scripts, which will automatically verify and install any missing dependencies for you.
 
 1. Clone the repository:
    ```bash
@@ -45,19 +47,33 @@ sudo apt install cmake build-essential
    cd TriggerCursor
    ```
 
-2. Install the package in editable mode:
-   ```bash
-   pip install -e .
-   ```
-   This registers the `triggercursor` executable command in your system path.
+2. Run the launcher for your operating system:
+   * **Linux / macOS:**
+     ```bash
+     ./run.sh
+     ```
+   * **Windows:**
+     Double-click `run.bat` or run:
+     ```cmd
+     python run.py
+     ```
 
-## Running the Application
+On first launch, TriggerCursor will automatically compile the C++ daemon binary inside your standard user data folder (`~/.local/share/triggercursor` on Linux / `%APPDATA%/TriggerCursor` on Windows) and register the application shortcut under your OS application menu (Linux).
 
-Launch the interface from the command line:
+---
+
+## Installation (Optional)
+
+If you prefer installing it system-wide to run the `triggercursor` command directly from anywhere in your terminal:
+
 ```bash
-triggercursor
+# On Linux (to bypass system package restrictions):
+pip install -e . --break-system-packages
+
+# On Windows:
+pip install -e .
 ```
-On first launch, TriggerCursor will automatically compile the C++ daemon binary inside your standard user configuration directory (`~/.local/share/triggercursor` on Linux / `%APPDATA%/TriggerCursor` on Windows) and create the relevant application shortcuts.
+
 
 ## Linux Permissions Setup
 
