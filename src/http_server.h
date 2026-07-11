@@ -7,6 +7,8 @@
 #include <iostream>
 #include <cstdlib>
 #include <cstring>
+#include <sstream>
+#include <vector>
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -24,6 +26,23 @@ typedef int socket_t;
 #define close_socket(s) close(s)
 #define invalid_socket(s) ((s) < 0)
 #endif
+
+inline std::vector<MacroAction> ParseMappingString(const std::string& str) {
+    std::vector<MacroAction> actions;
+    if (str.empty() || str == "none") return actions;
+    
+    std::stringstream ss(str);
+    std::string item;
+    while (std::getline(ss, item, ',')) {
+        size_t colon = item.find(':');
+        if (colon != std::string::npos) {
+            int type_val = std::strtol(item.substr(0, colon).c_str(), nullptr, 10);
+            int value_val = std::strtol(item.substr(colon + 1).c_str(), nullptr, 10);
+            actions.push_back({static_cast<ActionType>(type_val), value_val});
+        }
+    }
+    return actions;
+}
 
 inline void RunHTTPServer(SharedConfig* config) {
 #ifdef _WIN32
@@ -93,6 +112,16 @@ inline void RunHTTPServer(SharedConfig* config) {
             std::string req(buffer);
 
             if (req.find("GET /status") != std::string::npos) {
+                std::string c_name, c_type;
+                config->get_controller(c_name, c_type);
+                
+                std::string mappings_json = "[";
+                for (int i = 0; i < 16; ++i) {
+                    mappings_json += "{" + config->serialize_mappings(i) + "}";
+                    if (i + 1 < 16) mappings_json += ",";
+                }
+                mappings_json += "]";
+
                 std::string body = "{\"deadzone\":" + std::to_string(config->deadzone.load()) +
                                    ",\"sensitivity\":" + std::to_string(config->sensitivity.load()) +
                                    ",\"enabled\":" + (config->enabled.load() ? "true" : "false") +
@@ -103,7 +132,10 @@ inline void RunHTTPServer(SharedConfig* config) {
                                    ",\"key_x\":" + std::to_string(config->key_x.load()) +
                                    ",\"key_y\":" + std::to_string(config->key_y.load()) +
                                    ",\"invert_x\":" + (config->invert_x.load() ? "true" : "false") +
-                                   ",\"invert_y\":" + (config->invert_y.load() ? "true" : "false") + "}";
+                                   ",\"invert_y\":" + (config->invert_y.load() ? "true" : "false") +
+                                   ",\"controller_name\":\"" + c_name + "\"" +
+                                   ",\"controller_type\":\"" + c_type + "\"" +
+                                   ",\"mappings\":" + mappings_json + "}";
                 
                 std::string resp = "HTTP/1.1 200 OK\r\n"
                                    "Content-Type: application/json\r\n"
@@ -117,6 +149,62 @@ inline void RunHTTPServer(SharedConfig* config) {
                 config->enabled.store(new_state);
                 
                 std::string body = "{\"enabled\":" + std::string(new_state ? "true" : "false") + "}";
+                std::string resp = "HTTP/1.1 200 OK\r\n"
+                                   "Content-Type: application/json\r\n"
+                                   "Access-Control-Allow-Origin: *\r\n"
+                                   "Content-Length: " + std::to_string(body.length()) + "\r\n"
+                                   "Connection: close\r\n\r\n" + body;
+                send(client_fd, resp.c_str(), static_cast<int>(resp.length()), 0);
+            }
+            else if (req.find("GET /refresh") != std::string::npos) {
+                config->force_refresh.store(true);
+                
+                std::string body = "{\"status\":\"ok\"}";
+                std::string resp = "HTTP/1.1 200 OK\r\n"
+                                   "Content-Type: application/json\r\n"
+                                   "Access-Control-Allow-Origin: *\r\n"
+                                   "Content-Length: " + std::to_string(body.length()) + "\r\n"
+                                   "Connection: close\r\n\r\n" + body;
+                send(client_fd, resp.c_str(), static_cast<int>(resp.length()), 0);
+            }
+            else if (req.find("GET /set_mapping?") != std::string::npos) {
+                int btn_idx = -1;
+                size_t pos_btn = req.find("btn=");
+                if (pos_btn != std::string::npos) {
+                    btn_idx = std::strtol(req.substr(pos_btn + 4).c_str(), nullptr, 10);
+                }
+                
+                std::vector<MacroAction> press_actions;
+                size_t pos_press = req.find("press=");
+                if (pos_press != std::string::npos) {
+                    std::string val_str = req.substr(pos_press + 6);
+                    size_t pos_amp = val_str.find('&');
+                    size_t pos_space = val_str.find(' ');
+                    size_t end_pos = (pos_amp < pos_space) ? pos_amp : pos_space;
+                    if (end_pos != std::string::npos) {
+                        val_str = val_str.substr(0, end_pos);
+                    }
+                    press_actions = ParseMappingString(val_str);
+                }
+                
+                std::vector<MacroAction> release_actions;
+                size_t pos_release = req.find("release=");
+                if (pos_release != std::string::npos) {
+                    std::string val_str = req.substr(pos_release + 8);
+                    size_t pos_amp = val_str.find('&');
+                    size_t pos_space = val_str.find(' ');
+                    size_t end_pos = (pos_amp < pos_space) ? pos_amp : pos_space;
+                    if (end_pos != std::string::npos) {
+                        val_str = val_str.substr(0, end_pos);
+                    }
+                    release_actions = ParseMappingString(val_str);
+                }
+                
+                if (btn_idx >= 0 && btn_idx < 16) {
+                    config->set_button_mapping(btn_idx, press_actions, release_actions);
+                }
+                
+                std::string body = "{\"status\":\"ok\"}";
                 std::string resp = "HTTP/1.1 200 OK\r\n"
                                    "Content-Type: application/json\r\n"
                                    "Access-Control-Allow-Origin: *\r\n"
