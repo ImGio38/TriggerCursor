@@ -1,0 +1,33 @@
+# CMake build directories
+build/
+bin/
+lib/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+
+# Python build and cache files
+__pycache__/
+*.py[cod]
+*$py.class
+.ipynb_checkpoints/
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+# User config or logs
+config.json
+*.log
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Python packaging/distribution
+dist/
+*.egg-info/
+.eggs/
+

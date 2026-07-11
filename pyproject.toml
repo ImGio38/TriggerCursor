@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "triggercursor"
+version = "1.0.0"
+description = "A highly optimized near-zero overhead controller-to-mouse driver and dashboard."
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+classifiers = [
+    "Programming Language :: C++",
+    "Programming Language :: Python :: 3",
+    "Topic :: Utilities",
+]
+dependencies = [
+    "customtkinter>=6.0.0",
+]
+
+[project.scripts]
+triggercursor = "triggercursor.gui:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["triggercursor*"]
