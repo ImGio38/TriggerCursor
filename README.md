@@ -7,10 +7,22 @@ A highly optimized, near-zero overhead controller-to-mouse driver. It features a
 * **Native Desktop Interface:** Runs as a standalone desktop window without requiring a web browser.
 * **Auto-Launch & Self-Closing:** Launching the GUI automatically starts the background C++ daemon. Closing the GUI window terminates the daemon process immediately.
 * **Application Menu Integration (Linux):** Registers itself under the Linux system application menu ("TriggerCursor") with a native gamepad launcher icon.
-* **Custom Key Bindings:** Maps individual controller buttons (A, B, X, Y) to actions (Left Click, Right Click, Middle Click, or Disabled).
-* **Adjustable Sensitivity & Acceleration:**
-  * Sensitivity: Configurable down to fractional increments (0.5 to 20.0).
+* **Interactive Gamepad Programmer (Logitech G HUB Style):**
+  * Displays a visual Xbox/PlayStation outline layout built with vector graphics.
+  * Supports hover highlighting and click-to-select for all 16 controller buttons.
+  * Displays the active selected button highlighted in emerald green.
+  * Includes a **⟳ Refresh** button to force-rescan USB/Bluetooth ports and detect hotplugged controllers.
+* **Unified Button Mapper & Macro Engine:**
+  * Maps all 16 buttons (A, B, X, Y, LB, RB, LT, RT, LS, RS, Back, Start, and D-pad directions).
+  * Supports **Left Click**, **Right Click**, **Middle Click**, **Keyboard Key Holds**, and **Key Combos / Custom Macro chains** (e.g. `Ctrl+C` or `A,Delay:100,B`).
+  * Features a real-time macro action previewer.
+  * Automatic saving of macro entries on pressing **Enter** or clicking out of focus.
+* **Hardware-First Autodetect:** Bypasses virtual compatibility controllers (like Steam Input wrappers) by querying device bus IDs and prioritizing physical USB/Bluetooth devices.
+* **Deadzones & Inversion Controls:**
+  * Radial Deadzone size controller (0% to 50%).
+  * Sensitivity multiplier (0.5 to 20.0).
   * Acceleration Curve: Configurable curve power (1.0 for linear response, 2.0 for quadratic, and 3.0 for cubic).
+  * Axis Inversion: Separate toggles to invert X and Y cursor axes.
 * **Zero-Overhead Physics Backend:**
   * Linux: Uses evdev hardware event interrupts and consumes 0% CPU when the controller is idle.
   * Windows: Dynamically loads XInput at runtime and uses high-resolution waitable timers for sub-millisecond precision.
@@ -53,7 +65,6 @@ You can run the application directly using the launcher scripts, which will auto
      ./run.sh
      ```
    * **Windows:**
-
      Double-click `run.bat` or run:
      ```cmd
      python run.py
