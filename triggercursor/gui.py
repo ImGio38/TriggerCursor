@@ -388,8 +388,9 @@ class TriggerCursorApp(ctk.CTk):
         
         # Configure Window
         self.title("TriggerCursor Dashboard")
-        self.geometry("480x950")
-        self.resizable(False, False)
+        self.geometry("480x800")
+        self.resizable(False, True)
+        self.minsize(480, 500)
         
         # Set Modern Dark Theme
         ctk.set_appearance_mode("Dark")
@@ -554,15 +555,19 @@ Categories=Utility;
             print(f"[TriggerCursor] Failed to apply permissions: {e}")
 
     def create_widgets(self):
+        # Main Scrollable Container to fit all screen sizes and resolutions
+        self.scrollable_container = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        self.scrollable_container.pack(fill="both", expand=True, padx=0, pady=0)
+
         # Header Label
-        self.header = ctk.CTkLabel(self, text="TRIGGER CURSOR", font=ctk.CTkFont(family="Outfit", size=24, weight="bold"))
+        self.header = ctk.CTkLabel(self.scrollable_container, text="TRIGGER CURSOR", font=ctk.CTkFont(family="Outfit", size=24, weight="bold"))
         self.header.pack(pady=(15, 2))
         
-        self.sub_header = ctk.CTkLabel(self, text="Zero-Overhead Input Emulator", font=ctk.CTkFont(family="Outfit", size=12), text_color="#94a3b8")
+        self.sub_header = ctk.CTkLabel(self.scrollable_container, text="Zero-Overhead Input Emulator", font=ctk.CTkFont(family="Outfit", size=12), text_color="#94a3b8")
         self.sub_header.pack(pady=(0, 10))
 
         # Permission Warning Bar
-        self.warning_frame = ctk.CTkFrame(self, fg_color="#7f1d1d", height=45, corner_radius=8)
+        self.warning_frame = ctk.CTkFrame(self.scrollable_container, fg_color="#7f1d1d", height=45, corner_radius=8)
         self.warning_lbl = ctk.CTkLabel(
             self.warning_frame, 
             text="⚠️ Permissions missing (run as root).",
@@ -587,7 +592,7 @@ Categories=Utility;
             self.warning_frame.pack(fill="x", padx=20, pady=(0, 8))
 
         # Emulation Toggle Switch Card
-        self.status_card = ctk.CTkFrame(self, fg_color="#1e1b4b", corner_radius=12)
+        self.status_card = ctk.CTkFrame(self.scrollable_container, fg_color="#1e1b4b", corner_radius=12)
         self.status_card.pack(fill="x", padx=20, pady=4)
 
         self.status_title = ctk.CTkLabel(self.status_card, text="Emulation Active", font=ctk.CTkFont(size=14, weight="bold"))
@@ -597,7 +602,7 @@ Categories=Utility;
         self.toggle_switch.pack(side="right", padx=20, pady=10)
 
         # Sliders Settings Card
-        self.sliders_card = ctk.CTkFrame(self, corner_radius=12)
+        self.sliders_card = ctk.CTkFrame(self.scrollable_container, corner_radius=12)
         self.sliders_card.pack(fill="x", padx=20, pady=4)
 
         # Slider 1: Sensitivity
@@ -629,7 +634,7 @@ Categories=Utility;
         self.invert_y_switch.pack(side="right")
 
         # Controller Button Programmer Card
-        self.prog_card = ctk.CTkFrame(self, corner_radius=12)
+        self.prog_card = ctk.CTkFrame(self.scrollable_container, corner_radius=12)
         self.prog_card.pack(fill="x", padx=20, pady=4)
 
         self.prog_title = ctk.CTkLabel(self.prog_card, text="Button Mapping Programmer", font=ctk.CTkFont(size=14, weight="bold"))
@@ -713,7 +718,7 @@ Categories=Utility;
 
         # Uninstall Button
         self.uninstall_btn = ctk.CTkButton(
-            self,
+            self.scrollable_container,
             text="Uninstall Software",
             fg_color="#7f1d1d",
             hover_color="#b91c1c",
