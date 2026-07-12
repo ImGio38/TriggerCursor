@@ -32,16 +32,43 @@ A highly optimized, near-zero overhead controller-to-mouse driver. It features a
 
 Ensure your system has the required compilation tools to build the low-latency C++ backend:
 
-### Linux
-* Python 3 and pip
-* Git
-* CMake
-* C++ Compiler (GCC or Clang)
+### Linux Compatibility & Distros
 
-On Debian/Ubuntu systems, install these packages via:
-```bash
-sudo apt install cmake build-essential
-```
+TriggerCursor is display-server agnostic (works on both **Wayland** and **X11**) because it emulates hardware at the kernel level using `/dev/uinput`.
+
+#### Guaranteed to Work:
+* **Ubuntu** (18.04+)
+* **Debian** (10+)
+* **Fedora** (28+)
+* **Arch Linux / Manjaro**
+* **Linux Mint** (19+)
+* **Pop!_OS**
+* **openSUSE** (Leap & Tumbleweed)
+* **RHEL / Rocky Linux / AlmaLinux** (8+)
+
+#### Prerequisites & Installation by Distro:
+
+Depending on your distribution, you must install the compilation tools and Python's graphical interface toolkit (since `tkinter` is packaged separately by default on many distributions):
+
+* **Ubuntu / Debian / Mint / Pop!_OS:**
+  ```bash
+  sudo apt update
+  sudo apt install cmake build-essential python3-dev python3-tk
+  ```
+* **Fedora / RHEL / Rocky / Alma:**
+  ```bash
+  sudo dnf groupinstall "Development Tools"
+  sudo dnf install cmake python3-devel python3-tkinter
+  ```
+* **Arch Linux / Manjaro:**
+  ```bash
+  sudo pacman -S --needed base-devel cmake tk
+  ```
+
+#### What May Not Work / Known Gotchas:
+* **Immutable OSs (e.g., SteamOS / Steam Deck):** By default, SteamOS has a read-only root filesystem. To install compilation dependencies (`cmake`, `gcc`), you must temporarily unlock the filesystem (`steamos-readonly disable`) and initialize the pacman keys.
+* **Minimal / Server Kernels:** Custom-compiled or minimal server/container kernels may lack `uinput` support (`CONFIG_INPUT_UINPUT` disabled). Standard desktop kernels always have this module enabled.
+* **Systems without PolicyKit / `udev`:** The interface uses `pkexec` (PolicyKit) to graphically request udev rule setup for `/dev/uinput`. Minimal systems without a PolicyKit agent will require manual setup (see [Linux Permissions Setup](#linux-permissions-setup) below).
 
 ### Windows
 * Python 3 and pip
