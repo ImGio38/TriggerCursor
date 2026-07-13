@@ -66,8 +66,8 @@ Depending on your distribution, you must install the compilation tools and Pytho
 ### Windows
 * Python 3 and pip
 * Git
-* CMake
-* Visual Studio with the "Desktop development with C++" workload active
+* CMake (If missing, auto-installed by bootstrapper)
+* C++ Compiler (If missing, auto-installed by bootstrapper via a lightweight ~41MB portable toolchain)
 
 ## How to Run
 
@@ -94,7 +94,7 @@ Missing components are resolved automatically with visual spinners and progress 
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/<your-username>/TriggerCursor.git
+   git clone https://github.com/ImGio38/TriggerCursor.git
    cd TriggerCursor
    ```
 
