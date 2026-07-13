@@ -142,6 +142,7 @@ def find_mingw_gxx():
 def download_and_extract_w64devkit():
     import urllib.request
     import zipfile
+    import ssl
     
     user_data_dir = get_user_data_dir()
     zip_path = os.path.join(user_data_dir, "w64devkit.zip")
@@ -150,19 +151,58 @@ def download_and_extract_w64devkit():
     
     spinner = Spinner("Downloading w64devkit (~41MB)...")
     spinner.start()
+    
+    downloaded = False
+    error_msg = ""
+    
+    # Try 1: standard urllib
     try:
-        # Use a custom user-agent to avoid GitHub returning 403
         req = urllib.request.Request(
             url,
             headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
         )
-        with urllib.request.urlopen(req) as response, open(zip_path, 'wb') as out_file:
+        with urllib.request.urlopen(req, timeout=30) as response, open(zip_path, 'wb') as out_file:
             shutil.copyfileobj(response, out_file)
-        spinner.stop(success=True)
+        downloaded = True
     except Exception as e:
+        error_msg += f"Standard download failed: {e}\n"
+        
+    # Try 2: urllib with unverified context (bypassing certificate store errors)
+    if not downloaded:
+        try:
+            req = urllib.request.Request(
+                url,
+                headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+            )
+            context = ssl._create_unverified_context()
+            with urllib.request.urlopen(req, context=context, timeout=30) as response, open(zip_path, 'wb') as out_file:
+                shutil.copyfileobj(response, out_file)
+            downloaded = True
+        except Exception as e:
+            error_msg += f"Unverified SSL download failed: {e}\n"
+            
+    # Try 3: PowerShell (Windows native certificate store)
+    if not downloaded and sys.platform.startswith("win32"):
+        try:
+            ps_cmd = [
+                "powershell", "-Command",
+                f"[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; "
+                f"Invoke-WebRequest -Uri '{url}' -OutFile '{zip_path}'"
+            ]
+            res = subprocess.run(ps_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            if res.returncode == 0:
+                downloaded = True
+            else:
+                error_msg += f"PowerShell download failed with exit code {res.returncode}. Stderr: {res.stderr.decode(errors='ignore')}\n"
+        except Exception as e:
+            error_msg += f"PowerShell execution failed: {e}\n"
+            
+    if not downloaded:
         spinner.stop(success=False)
-        print(f"{COLOR_RED}Failed to download w64devkit: {e}{COLOR_RESET}")
+        print(f"{COLOR_RED}Failed to download w64devkit. Details:\n{error_msg}{COLOR_RESET}")
         return False
+        
+    spinner.stop(success=True)
         
     spinner = Spinner("Extracting compiler toolchain...")
     spinner.start()
@@ -413,6 +453,7 @@ def main():
                             if gxx_dir not in os.environ["PATH"]:
                                 os.environ["PATH"] += os.pathsep + gxx_dir
                             print(f"{COLOR_GREEN}✓ w64devkit compiler successfully configured at {gxx_path}{COLOR_RESET}")
+                            compiler_path = gxx_path
                         else:
                             print(f"{COLOR_YELLOW}! compiler could not be located immediately. A terminal restart may be required.{COLOR_RESET}")
                 elif choice == "2":
@@ -425,6 +466,7 @@ def main():
                             if gxx_dir not in os.environ["PATH"]:
                                 os.environ["PATH"] += os.pathsep + gxx_dir
                             print(f"{COLOR_GREEN}✓ MinGW compiler successfully configured at {gxx_path}{COLOR_RESET}")
+                            compiler_path = gxx_path
                         else:
                             print(f"{COLOR_YELLOW}! MinGW installed, but compiler could not be located immediately. A terminal restart may be required.{COLOR_RESET}")
                 elif choice == "3":
@@ -522,18 +564,22 @@ def main():
         try:
             os.makedirs(build_dir, exist_ok=True)
             if sys.platform.startswith("win32"):
-                # Determine generator and compiler configuration
-                generator_args = []
+                # If we have g++ (e.g. w64devkit), compile directly to bypass CMake issues on Windows
                 if compiler_path and "g++" in compiler_path.lower():
-                    generator_args = ["-G", "MinGW Makefiles", "-DCMAKE_BUILD_TYPE=Release"]
+                    cmd = [
+                        compiler_path, "-O3", "-std=c++17",
+                        os.path.join(root_dir, "src", "main.cpp"),
+                        os.path.join(root_dir, "src", "windows_impl.cpp"),
+                        "-o", os.path.join(build_dir, "trigger_cursor_daemon.exe"),
+                        "-lws2_32", "-lwinmm"
+                    ]
+                    success, _ = run_command_with_spinner(cmd, "Compiling native C++ backend directly with g++", cwd=build_dir)
                 else:
+                    # Fallback to CMake (e.g. for MSVC)
                     generator_args = ["-DCMAKE_BUILD_TYPE=Release"]
-                
-                # Run configure
-                success, _ = run_command_with_spinner(["cmake"] + generator_args + ["-B", build_dir, "-S", root_dir], "Configuring CMake build environment", cwd=build_dir)
-                # Run build
-                if success:
-                    run_command_with_spinner(["cmake", "--build", build_dir, "--config", "Release"], "Compiling native C++ backend (Release)", cwd=build_dir)
+                    success, _ = run_command_with_spinner(["cmake"] + generator_args + ["-B", build_dir, "-S", root_dir], "Configuring CMake build environment", cwd=build_dir)
+                    if success:
+                        success, _ = run_command_with_spinner(["cmake", "--build", build_dir, "--config", "Release"], "Compiling native C++ backend (Release)", cwd=build_dir)
             else:
                 # Run configure
                 success, _ = run_command_with_spinner(["cmake", "-B", build_dir, "-S", root_dir, "-DCMAKE_BUILD_TYPE=Release"], "Configuring CMake build environment", cwd=build_dir)
@@ -572,9 +618,16 @@ def main():
                         except Exception as e:
                             spinner.stop(success=False)
                             print(f"Warning: Could not remove temporary compiler files: {e}")
+            else:
+                print(f"\n{COLOR_RED}Error: Failed to compile native C++ backend daemon.{COLOR_RESET}")
+                print("The application cannot run without the compiled backend daemon.")
+                input("\nPress Enter to exit...")
+                sys.exit(1)
         except Exception as e:
-            print(f"{COLOR_RED}Warning: Backend compilation failed: {e}{COLOR_RESET}")
-            print("Launcher will proceed, but daemon operations might fail.")
+            print(f"{COLOR_RED}Error: Backend compilation failed: {e}{COLOR_RESET}")
+            print("The application cannot run without the compiled backend daemon.")
+            input("\nPress Enter to exit...")
+            sys.exit(1)
 
     # --- 5. LAUNCH GUI APPLICATION ---
     # Append root_dir to path so python launcher can find triggercursor package

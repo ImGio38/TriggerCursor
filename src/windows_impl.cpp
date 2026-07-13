@@ -149,6 +149,8 @@ int RunWindowsDaemon(SharedConfig& config) {
     // Accumulators for fractional pixel movements
     float accum_x = 0.0f;
     float accum_y = 0.0f;
+    float accum_scroll_x = 0.0f;
+    float accum_scroll_y = 0.0f;
 
     while (config.running.load()) {
         // Handle forced controller refresh/reconnect request
@@ -189,6 +191,8 @@ int RunWindowsDaemon(SharedConfig& config) {
         bool current_states[16] = {false};
         float norm_x = 0.0f;
         float norm_y = 0.0f;
+        float rx = 0.0f;
+        float ry = 0.0f;
         bool device_connected = false;
         std::string current_name = "None";
         std::string current_type = "None";
@@ -217,11 +221,17 @@ int RunWindowsDaemon(SharedConfig& config) {
 
             norm_x = static_cast<float>(xstate.Gamepad.sThumbLX) / 32768.0f;
             norm_y = static_cast<float>(xstate.Gamepad.sThumbLY) / 32768.0f;
+            rx = static_cast<float>(xstate.Gamepad.sThumbRX) / 32768.0f;
+            ry = static_cast<float>(xstate.Gamepad.sThumbRY) / 32768.0f;
             
             if (norm_x > 1.0f) norm_x = 1.0f;
             else if (norm_x < -1.0f) norm_x = -1.0f;
             if (norm_y > 1.0f) norm_y = 1.0f;
             else if (norm_y < -1.0f) norm_y = -1.0f;
+            if (rx > 1.0f) rx = 1.0f;
+            else if (rx < -1.0f) rx = -1.0f;
+            if (ry > 1.0f) ry = 1.0f;
+            else if (ry < -1.0f) ry = -1.0f;
         } 
         else {
             // 2. Query WinMM Joysticks
@@ -305,10 +315,26 @@ int RunWindowsDaemon(SharedConfig& config) {
                         // Invert Y because up is 0 and down is 65535 in WinMM
                         norm_y = -(static_cast<float>(joy_info.dwYpos) - 32768.0f) / 32768.0f;
 
+                        // Map right stick axes (commonly Z/R or U/V depending on WinMM mapping)
+                        rx = (static_cast<float>(joy_info.dwZpos) - 32768.0f) / 32768.0f;
+                        ry = -(static_cast<float>(joy_info.dwRpos) - 32768.0f) / 32768.0f;
+
+                        // Fallback check if U/V is used instead of Z/R
+                        if (std::abs(rx) < 0.05f && caps.wNumAxes > 4) {
+                            rx = (static_cast<float>(joy_info.dwUpos) - 32768.0f) / 32768.0f;
+                        }
+                        if (std::abs(ry) < 0.05f && caps.wNumAxes > 5) {
+                            ry = -(static_cast<float>(joy_info.dwVpos) - 32768.0f) / 32768.0f;
+                        }
+
                         if (norm_x > 1.0f) norm_x = 1.0f;
                         else if (norm_x < -1.0f) norm_x = -1.0f;
                         if (norm_y > 1.0f) norm_y = 1.0f;
                         else if (norm_y < -1.0f) norm_y = -1.0f;
+                        if (rx > 1.0f) rx = 1.0f;
+                        else if (rx < -1.0f) rx = -1.0f;
+                        if (ry > 1.0f) ry = 1.0f;
+                        else if (ry < -1.0f) ry = -1.0f;
 
                         break;
                     }
@@ -375,9 +401,49 @@ int RunWindowsDaemon(SharedConfig& config) {
             if (move_x != 0 || move_y != 0) {
                 SendRelativeMove(move_x, move_y);
             }
+
+            // Process scrolling (right stick)
+            if (config.right_stick_scroll.load()) {
+                float scroll_dx = 0.0f;
+                float scroll_dy = 0.0f;
+                // Calculate scroll sensitivity scaled by time to keep it constant across different poll rates
+                float scroll_sensitivity = 40.0f * (static_cast<float>(config.poll_rate_ms.load()) / 1000.0f);
+                MathUtils::ProcessJoystick(rx, ry, config.deadzone.load(), scroll_sensitivity, config.curve_power.load(), scroll_dx, scroll_dy);
+
+                accum_scroll_x += scroll_dx;
+                accum_scroll_y += scroll_dy;
+
+                int scroll_ticks_x = static_cast<int>(accum_scroll_x);
+                int scroll_ticks_y = static_cast<int>(accum_scroll_y);
+
+                accum_scroll_x -= scroll_ticks_x;
+                accum_scroll_y -= scroll_ticks_y;
+
+                if (scroll_ticks_y != 0) {
+                    INPUT input;
+                    ZeroMemory(&input, sizeof(INPUT));
+                    input.type = INPUT_MOUSE;
+                    input.mi.dwFlags = MOUSEEVENTF_WHEEL;
+                    input.mi.mouseData = static_cast<DWORD>(scroll_ticks_y * 120); // 120 = WHEEL_DELTA
+                    SendInput(1, &input, sizeof(INPUT));
+                }
+                if (scroll_ticks_x != 0) {
+                    INPUT input;
+                    ZeroMemory(&input, sizeof(INPUT));
+                    input.type = INPUT_MOUSE;
+                    input.mi.dwFlags = MOUSEEVENTF_HWHEEL;
+                    input.mi.mouseData = static_cast<DWORD>(scroll_ticks_x * 120); // 120 = WHEEL_DELTA
+                    SendInput(1, &input, sizeof(INPUT));
+                }
+            } else {
+                accum_scroll_x = 0.0f;
+                accum_scroll_y = 0.0f;
+            }
         } else {
             accum_x = 0.0f;
             accum_y = 0.0f;
+            accum_scroll_x = 0.0f;
+            accum_scroll_y = 0.0f;
         }
     }
 

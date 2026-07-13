@@ -144,6 +144,7 @@ inline void RunHTTPServer(SharedConfig* config) {
                                    ",\"key_y\":" + std::to_string(config->key_y.load()) +
                                    ",\"invert_x\":" + (config->invert_x.load() ? "true" : "false") +
                                    ",\"invert_y\":" + (config->invert_y.load() ? "true" : "false") +
+                                   ",\"right_stick_scroll\":" + (config->right_stick_scroll.load() ? "true" : "false") +
                                    ",\"controller_name\":\"" + c_name + "\"" +
                                    ",\"controller_type\":\"" + c_type + "\"" +
                                    ",\"mappings\":" + mappings_json + "}";
@@ -273,6 +274,11 @@ inline void RunHTTPServer(SharedConfig* config) {
                 if (pos_invy != std::string::npos) {
                     bool invy = req.substr(pos_invy + 9, 1) == "1" || req.substr(pos_invy + 9, 4) == "true";
                     config->invert_y.store(invy);
+                }
+                size_t pos_rss = req.find("right_stick_scroll=");
+                if (pos_rss != std::string::npos) {
+                    bool rss = req.substr(pos_rss + 19, 1) == "1" || req.substr(pos_rss + 19, 4) == "true";
+                    config->right_stick_scroll.store(rss);
                 }
                 
                 std::string body = "{\"status\":\"ok\"}";

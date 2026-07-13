@@ -207,8 +207,12 @@ int RunLinuxDaemon(SharedConfig& config) {
     // Limits
     struct input_absinfo abs_x_info;
     struct input_absinfo abs_y_info;
+    struct input_absinfo abs_rx_info;
+    struct input_absinfo abs_ry_info;
     std::memset(&abs_x_info, 0, sizeof(abs_x_info));
     std::memset(&abs_y_info, 0, sizeof(abs_y_info));
+    std::memset(&abs_rx_info, 0, sizeof(abs_rx_info));
+    std::memset(&abs_ry_info, 0, sizeof(abs_ry_info));
 
     // Setup Virtual Mouse & Keyboard (uinput)
     int uinput_fd = open("/dev/uinput", O_WRONLY | O_NONBLOCK);
@@ -221,6 +225,8 @@ int RunLinuxDaemon(SharedConfig& config) {
     ioctl(uinput_fd, UI_SET_EVBIT, EV_REL);
     ioctl(uinput_fd, UI_SET_RELBIT, REL_X);
     ioctl(uinput_fd, UI_SET_RELBIT, REL_Y);
+    ioctl(uinput_fd, UI_SET_RELBIT, REL_WHEEL);
+    ioctl(uinput_fd, UI_SET_RELBIT, REL_HWHEEL);
 
     // Enable key events (including mouse buttons and keyboard keys)
     ioctl(uinput_fd, UI_SET_EVBIT, EV_KEY);
@@ -251,6 +257,8 @@ int RunLinuxDaemon(SharedConfig& config) {
     // Accumulators for fractional movement
     float accum_x = 0.0f;
     float accum_y = 0.0f;
+    float accum_scroll_x = 0.0f;
+    float accum_scroll_y = 0.0f;
 
     // Track D-pad state changes
     int last_hat_x = 0;
@@ -304,10 +312,14 @@ int RunLinuxDaemon(SharedConfig& config) {
                     std::cout << "[Linux Daemon] Opened gamepad: " << name_str << " (" << type_str << ") at " << dev_path << std::endl;
 
                     if (ioctl(gamepad_fd, EVIOCGABS(ABS_X), &abs_x_info) < 0 ||
-                        ioctl(gamepad_fd, EVIOCGABS(ABS_Y), &abs_y_info) < 0) {
+                        ioctl(gamepad_fd, EVIOCGABS(ABS_Y), &abs_y_info) < 0 ||
+                        ioctl(gamepad_fd, EVIOCGABS(ABS_RX), &abs_rx_info) < 0 ||
+                        ioctl(gamepad_fd, EVIOCGABS(ABS_RY), &abs_ry_info) < 0) {
                         std::cerr << "[Linux Daemon] Warning: Failed to query axis ranges. Defaulting to 16-bit limits." << std::endl;
                         abs_x_info.minimum = -32768; abs_x_info.maximum = 32767;
                         abs_y_info.minimum = -32768; abs_y_info.maximum = 32767;
+                        abs_rx_info.minimum = -32768; abs_rx_info.maximum = 32767;
+                        abs_ry_info.minimum = -32768; abs_ry_info.maximum = 32767;
                     }
                 }
             }
@@ -329,6 +341,8 @@ int RunLinuxDaemon(SharedConfig& config) {
 
         int32_t raw_x = abs_x_info.value;
         int32_t raw_y = abs_y_info.value;
+        int32_t raw_rx = abs_rx_info.value;
+        int32_t raw_ry = abs_ry_info.value;
         int timeout_ms = -1; // Start in blocking mode
 
         // Inner poll loop for reading gamepad input
@@ -367,6 +381,10 @@ int RunLinuxDaemon(SharedConfig& config) {
                                 raw_x = evs[i].value;
                             } else if (evs[i].code == ABS_Y) {
                                 raw_y = evs[i].value;
+                            } else if (evs[i].code == ABS_RX) {
+                                raw_rx = evs[i].value;
+                            } else if (evs[i].code == ABS_RY) {
+                                raw_ry = evs[i].value;
                             } else if (evs[i].code == ABS_HAT0X) {
                                 int current_hat_x = evs[i].value;
                                 if (current_hat_x != last_hat_x) {
@@ -431,6 +449,8 @@ int RunLinuxDaemon(SharedConfig& config) {
 
             float norm_x = NormalizeAxis(raw_x, abs_x_info);
             float norm_y = NormalizeAxis(raw_y, abs_y_info);
+            float norm_rx = NormalizeAxis(raw_rx, abs_rx_info);
+            float norm_ry = NormalizeAxis(raw_ry, abs_ry_info);
 
             if (config.enabled.load()) {
                 float out_dx = 0.0f;
@@ -452,15 +472,64 @@ int RunLinuxDaemon(SharedConfig& config) {
                 if (move_x != 0 || move_y != 0) {
                     SendRelativeMove(uinput_fd, move_x, move_y);
                 }
+
+                // Process scrolling (right stick)
+                if (config.right_stick_scroll.load()) {
+                    float scroll_dx = 0.0f;
+                    float scroll_dy = 0.0f;
+                    // Calculate scroll sensitivity scaled by time to keep it constant across different poll rates
+                    float scroll_sensitivity = 40.0f * (static_cast<float>(config.poll_rate_ms.load()) / 1000.0f);
+                    
+                    // Invert right stick Y because Linux raw ABS_RY is positive down, but we want positive scroll UP
+                    MathUtils::ProcessJoystick(norm_rx, -norm_ry, config.deadzone.load(), scroll_sensitivity, config.curve_power.load(), scroll_dx, scroll_dy);
+
+                    accum_scroll_x += scroll_dx;
+                    accum_scroll_y += scroll_dy;
+
+                    int scroll_ticks_x = static_cast<int>(accum_scroll_x);
+                    int scroll_ticks_y = static_cast<int>(accum_scroll_y);
+
+                    accum_scroll_x -= scroll_ticks_x;
+                    accum_scroll_y -= scroll_ticks_y;
+
+                    if (scroll_ticks_y != 0) {
+                        struct input_event evs[2];
+                        std::memset(evs, 0, sizeof(evs));
+                        evs[0].type = EV_REL;
+                        evs[0].code = REL_WHEEL;
+                        evs[0].value = scroll_ticks_y;
+                        evs[1].type = EV_SYN;
+                        evs[1].code = SYN_REPORT;
+                        evs[1].value = 0;
+                        write(uinput_fd, evs, sizeof(evs));
+                    }
+                    if (scroll_ticks_x != 0) {
+                        struct input_event evs[2];
+                        std::memset(evs, 0, sizeof(evs));
+                        evs[0].type = EV_REL;
+                        evs[0].code = REL_HWHEEL;
+                        evs[0].value = scroll_ticks_x;
+                        evs[1].type = EV_SYN;
+                        evs[1].code = SYN_REPORT;
+                        evs[1].value = 0;
+                        write(uinput_fd, evs, sizeof(evs));
+                    }
+                } else {
+                    accum_scroll_x = 0.0f;
+                    accum_scroll_y = 0.0f;
+                }
             } else {
                 accum_x = 0.0f;
                 accum_y = 0.0f;
+                accum_scroll_x = 0.0f;
+                accum_scroll_y = 0.0f;
             }
 
             float mag2 = norm_x * norm_x + norm_y * norm_y;
+            float mag2_r = norm_rx * norm_rx + norm_ry * norm_ry;
             float deadzone2 = config.deadzone.load() * config.deadzone.load();
 
-            if (config.enabled.load() && mag2 >= deadzone2) {
+            if (config.enabled.load() && (mag2 >= deadzone2 || (config.right_stick_scroll.load() && mag2_r >= deadzone2))) {
                 timeout_ms = config.poll_rate_ms.load();
             } else {
                 timeout_ms = -1;

@@ -420,9 +420,11 @@ class TriggerCursorApp(ctk.CTk):
         # 1. Compile C++ Daemon if missing
         self.ensure_daemon_binary()
         
-        # 2. Register Linux Desktop Launcher (.desktop file)
+        # 2. Register Desktop/StartMenu Launchers
         if sys.platform.startswith("linux"):
             self.register_desktop_launcher()
+        elif sys.platform.startswith("win32"):
+            self.register_windows_launcher()
 
         # 3. Check for Linux Permissions
         self.permissions_ok = True
@@ -466,15 +468,88 @@ class TriggerCursorApp(ctk.CTk):
             try:
                 os.makedirs(self.build_dir, exist_ok=True)
                 if sys.platform.startswith("win32"):
-                    subprocess.run(["cmake", "-B", self.build_dir, "-S", self.source_dir], cwd=self.build_dir, check=True)
-                    subprocess.run(["cmake", "--build", self.build_dir, "--config", "Release"], cwd=self.build_dir, check=True)
-                    self.binary_path = os.path.join(self.build_dir, "Release", "trigger_cursor_daemon.exe")
+                    # Check if we can find g++ first
+                    gxx_path = self.find_mingw_gxx()
+                    if gxx_path:
+                        cmd = [
+                            gxx_path, "-O3", "-std=c++17",
+                            os.path.join(self.source_dir, "src", "main.cpp"),
+                            os.path.join(self.source_dir, "src", "windows_impl.cpp"),
+                            "-o", os.path.join(self.build_dir, "trigger_cursor_daemon.exe"),
+                            "-lws2_32", "-lwinmm"
+                        ]
+                        subprocess.run(cmd, check=True)
+                        self.binary_path = os.path.join(self.build_dir, "trigger_cursor_daemon.exe")
+                    else:
+                        subprocess.run(["cmake", "-B", self.build_dir, "-S", self.source_dir], cwd=self.build_dir, check=True)
+                        subprocess.run(["cmake", "--build", self.build_dir, "--config", "Release"], cwd=self.build_dir, check=True)
+                        self.binary_path = os.path.join(self.build_dir, "Release", "trigger_cursor_daemon.exe")
                 else:
                     subprocess.run(["cmake", "-B", self.build_dir, "-S", self.source_dir, "-DCMAKE_BUILD_TYPE=Release"], cwd=self.build_dir, check=True)
                     subprocess.run(["cmake", "--build", self.build_dir], cwd=self.build_dir, check=True)
                 print("[TriggerCursor] Compilation successful!")
             except Exception as e:
                 print(f"[TriggerCursor] Failed to compile daemon: {e}")
+
+    def find_mingw_gxx(self):
+        if shutil.which("g++"):
+            return shutil.which("g++")
+            
+        search_bases = [
+            self.user_data_dir,
+            os.path.expandvars(r"%LocalAppData%\Microsoft\WinGet\Packages"),
+            os.path.expandvars(r"%ProgramFiles%"),
+            os.path.expandvars(r"%ProgramFiles(x86)%"),
+            os.path.expandvars(r"%UserProfile%\AppData\Local\Programs"),
+            r"C:\winlibs"
+        ]
+        
+        for base in search_bases:
+            if not os.path.exists(base):
+                continue
+            try:
+                for entry in os.scandir(base):
+                    if entry.is_dir():
+                        name_lower = entry.name.lower()
+                        if "winlibs" in name_lower or "mingw" in name_lower or "msys" in name_lower or "w64devkit" in name_lower:
+                            for root, dirs, files in os.walk(entry.path):
+                                if "g++.exe" in files:
+                                    return os.path.join(root, "g++.exe")
+                                # Don't go too deep to avoid performance issues
+                                rel_path = os.path.relpath(root, entry.path)
+                                depth = len(rel_path.split(os.sep))
+                                if depth > 3:
+                                    del dirs[:]
+            except Exception:
+                pass
+        return None
+
+    def register_windows_launcher(self):
+        desktop = os.path.join(os.environ.get("USERPROFILE", ""), "Desktop")
+        start_menu = os.path.join(os.environ.get("USERPROFILE", ""), "AppData", "Roaming", "Microsoft", "Windows", "Start Menu", "Programs")
+        
+        target_bat = os.path.join(self.source_dir, "run.bat")
+        if not os.path.exists(target_bat):
+            return
+            
+        icon_path = os.path.join(self.source_dir, "triggercursor", "icon.ico")
+        icon_loc = icon_path if os.path.exists(icon_path) else sys.executable
+        
+        for folder, name in [(desktop, "TriggerCursor.lnk"), (start_menu, "TriggerCursor.lnk")]:
+            shortcut_path = os.path.join(folder, name)
+            ps_script = f"""
+            $WshShell = New-Object -ComObject WScript.Shell;
+            $Shortcut = $WshShell.CreateShortcut('{shortcut_path}');
+            $Shortcut.TargetPath = '{target_bat}';
+            $Shortcut.WorkingDirectory = '{self.source_dir}';
+            $Shortcut.IconLocation = '{icon_loc}';
+            $Shortcut.Save();
+            """
+            try:
+                if sys.platform.startswith("win32"):
+                    subprocess.run(["powershell", "-Command", ps_script], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception as e:
+                print(f"[TriggerCursor] Failed to create shortcut in {folder}: {e}")
 
     def register_desktop_launcher(self):
         desktop_dir = os.path.expanduser("~/.local/share/applications")
@@ -642,13 +717,20 @@ Categories=Utility;
 
         # Axis Inversion Toggles
         self.invert_frame = ctk.CTkFrame(self.sliders_card, fg_color="transparent")
-        self.invert_frame.pack(fill="x", padx=20, pady=(0, 10))
+        self.invert_frame.pack(fill="x", padx=20, pady=(0, 5))
         
         self.invert_x_switch = ctk.CTkSwitch(self.invert_frame, text="Invert X Axis", command=self.trigger_config_update)
         self.invert_x_switch.pack(side="left")
         
         self.invert_y_switch = ctk.CTkSwitch(self.invert_frame, text="Invert Y Axis", command=self.trigger_config_update)
         self.invert_y_switch.pack(side="right")
+
+        # Right Stick Scroll Toggle
+        self.scroll_frame = ctk.CTkFrame(self.sliders_card, fg_color="transparent")
+        self.scroll_frame.pack(fill="x", padx=20, pady=(0, 10))
+
+        self.rss_switch = ctk.CTkSwitch(self.scroll_frame, text="Right Stick Scroll", command=self.trigger_config_update)
+        self.rss_switch.pack(side="left")
 
         # Controller Button Programmer Card
         self.prog_card = ctk.CTkFrame(self.scrollable_container, corner_radius=12)
@@ -1050,20 +1132,30 @@ Categories=Utility;
             "Uninstall complete! The application directory will now be deleted, and the program will exit."
         )
 
-        # 5. Self-destruct package directory and config folder
+        # 5. Self-destruct package directory and config folder (but don't delete source code in a dev repository clone)
         try:
             quoted_package_dir = shlex.quote(self.package_dir)
             quoted_user_data_dir = shlex.quote(self.user_data_dir)
+            is_dev_repo = os.path.exists(os.path.join(self.source_dir, ".git"))
+            
             if sys.platform.startswith("win32"):
-                cmd = f'ping 127.0.0.1 -n 2 > nul & rmdir /s /q "{self.package_dir}" & rmdir /s /q "{self.user_data_dir}"'
+                if is_dev_repo:
+                    cmd = f'ping 127.0.0.1 -n 2 > nul & rmdir /s /q "{self.user_data_dir}"'
+                else:
+                    cmd = f'ping 127.0.0.1 -n 2 > nul & rmdir /s /q "{self.package_dir}" & rmdir /s /q "{self.user_data_dir}"'
                 subprocess.Popen(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             else:
-                cmd = f"sleep 0.2 && rm -rf {quoted_package_dir} && rm -rf {quoted_user_data_dir}"
+                if is_dev_repo:
+                    cmd = f"sleep 0.2 && rm -rf {quoted_user_data_dir}"
+                else:
+                    cmd = f"sleep 0.2 && rm -rf {quoted_package_dir} && rm -rf {quoted_user_data_dir}"
                 subprocess.Popen(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception as e:
             print(f"[TriggerCursor] Failed to launch self-destruct command: {e}")
             try:
-                shutil.rmtree(self.package_dir)
+                is_dev_repo = os.path.exists(os.path.join(self.source_dir, ".git"))
+                if not is_dev_repo:
+                    shutil.rmtree(self.package_dir)
                 shutil.rmtree(self.user_data_dir)
             except Exception:
                 pass
@@ -1132,8 +1224,9 @@ Categories=Utility;
 
         inv_x = 1 if self.invert_x_switch.get() else 0
         inv_y = 1 if self.invert_y_switch.get() else 0
+        rss = 1 if self.rss_switch.get() else 0
 
-        url = f"{HOST}/set?deadzone={dz:.2f}&sensitivity={sens:.1f}&curve_power={curve:.1f}&invert_x={inv_x}&invert_y={inv_y}"
+        url = f"{HOST}/set?deadzone={dz:.2f}&sensitivity={sens:.1f}&curve_power={curve:.1f}&invert_x={inv_x}&invert_y={inv_y}&right_stick_scroll={rss}"
         
         def do_update():
             try:
@@ -1155,9 +1248,9 @@ Categories=Utility;
                 req = urllib.request.Request(f"{HOST}/status")
                 with urllib.request.urlopen(req, timeout=0.5) as resp:
                     data = json.loads(resp.read().decode('utf-8'))
-                    self.after(0, lambda: self.handle_poll_response(data))
+                    self.after(0, lambda d=data: self.handle_poll_response(d))
             except Exception as e:
-                self.after(0, lambda: self.handle_poll_error(e))
+                self.after(0, lambda err=e: self.handle_poll_error(err))
 
         threading.Thread(target=do_poll, daemon=True).start()
 
@@ -1190,6 +1283,11 @@ Categories=Utility;
                     self.invert_y_switch.select()
                 else:
                     self.invert_y_switch.deselect()
+            if "right_stick_scroll" in data:
+                if data["right_stick_scroll"]:
+                    self.rss_switch.select()
+                else:
+                    self.rss_switch.deselect()
                     
             self._updating_sliders = False
 

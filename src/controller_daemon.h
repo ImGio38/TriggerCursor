@@ -37,6 +37,7 @@ struct SharedConfig {
     std::atomic<int> key_y{0};
     std::atomic<bool> invert_x{false};       // Invert X axis
     std::atomic<bool> invert_y{false};       // Invert Y axis
+    std::atomic<bool> right_stick_scroll{true}; // Right stick to scroll (default: true)
     std::atomic<bool> force_refresh{false};  // Re-detect/refresh controller
 
     // 16 button mappings (press and release sequences)

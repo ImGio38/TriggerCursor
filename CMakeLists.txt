@@ -25,5 +25,6 @@ elseif(WIN32)
     # Windows compilation path
     target_sources(trigger_cursor_daemon PRIVATE src/windows_impl.cpp)
     # Link winmm.lib for timeBeginPeriod/timeEndPeriod fallback support
-    target_link_libraries(trigger_cursor_daemon PRIVATE winmm)
+    # Link ws2_32.lib for Winsock support
+    target_link_libraries(trigger_cursor_daemon PRIVATE winmm ws2_32)
 endif()
