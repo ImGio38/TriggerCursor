@@ -22,7 +22,7 @@ A highly optimized, near-zero overhead controller-to-mouse driver. It features a
 
 Ensure your system has the required compilation tools to build the low-latency C++ backend:
 
-> [!TIP]
+> [!NOTE]
 > **Automatic Setup (Zero Friction):** On first launch, the bootstrapper script (`run.sh` on Linux / `run.bat` on Windows) will automatically detect, download, and install any missing dependencies (including Python, Tkinter, CMake, C++ compiler tools, and Python library packages) using a visual installer interface in your terminal. You do not need to install them manually!
 
 ### Linux Compatibility & Distros
