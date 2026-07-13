@@ -66,9 +66,31 @@ Depending on your distribution, you must install the compilation tools and Pytho
 * CMake
 * Visual Studio with the "Desktop development with C++" workload active
 
+> [!NOTE]
+> **Automatic Setup:** If Python, CMake, or Visual Studio C++ Build Tools are missing, the launcher will automatically attempt to install them for you.
+
 ## How to Run
 
-You can run the application directly using the launcher scripts, which will automatically verify and install any missing dependencies for you.
+TriggerCursor features a unified, cross-platform terminal bootstrapper that automatically checks system requirements, installs missing dependencies, compiles the low-overhead C++ backend daemon, and boots the application.
+
+### Visual Installer UI
+On launch, the bootstrapper presents a clear setup plan board:
+
+```text
+==========================================================
+              TriggerCursor System Setup                  
+==========================================================
+
+System Verification Plan:
+-----------------------------------------------------------------
+  [✓] Tkinter (GUI Toolkit)          : INSTALLED
+  [-] CMake (Build Tool)             : MISSING (Will install via winget)
+  [-] C++ Compiler                   : MISSING (Will install via winget)
+  [-] CustomTkinter (Python Package) : MISSING (Will install via pip)
+-----------------------------------------------------------------
+```
+
+Missing components are resolved automatically with visual spinners and progress loaders (utilizing native package managers: `apt`, `dnf`, or `pacman` on Linux; `winget` and `pip` on Windows).
 
 1. Clone the repository:
    ```bash
