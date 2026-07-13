@@ -20,6 +20,12 @@ COLOR_BOLD = "\033[1m"
 def enable_ansi_support():
     if sys.platform.startswith("win32"):
         try:
+            # Reconfigure stdout and stderr to UTF-8 to prevent UnicodeEncodeError on Windows
+            if hasattr(sys.stdout, 'reconfigure'):
+                sys.stdout.reconfigure(encoding='utf-8')
+            if hasattr(sys.stderr, 'reconfigure'):
+                sys.stderr.reconfigure(encoding='utf-8')
+                
             kernel32 = ctypes.windll.kernel32
             # ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
             kernel32.SetConsoleMode(kernel32.GetStdHandle(-11), 7)
@@ -116,7 +122,11 @@ def find_mingw_gxx():
         os.path.expandvars(r"%ProgramFiles%"),
         os.path.expandvars(r"%ProgramFiles(x86)%"),
         os.path.expandvars(r"%UserProfile%\AppData\Local\Programs"),
-        r"C:\winlibs"
+        r"C:\winlibs",
+        r"C:\mingw64",
+        r"C:\MinGW",
+        r"C:\msys64",
+        r"C:\msys"
     ]
     
     for base in search_bases:
@@ -139,15 +149,15 @@ def find_mingw_gxx():
             pass
     return None
 
-def download_and_extract_w64devkit():
+def download_and_extract_w64devkit(dest_dir):
     import urllib.request
     import zipfile
     import ssl
     
-    user_data_dir = get_user_data_dir()
-    zip_path = os.path.join(user_data_dir, "w64devkit.zip")
+    os.makedirs(dest_dir, exist_ok=True)
+    zip_path = os.path.join(dest_dir, "w64devkit.zip")
     
-    url = "https://github.com/skeeto/w64devkit/releases/download/v2.8.0/w64devkit-2.8.0.zip"
+    url = "https://github.com/skeeto/w64devkit/releases/download/v1.19.0/w64devkit-1.19.0.zip"
     
     spinner = Spinner("Downloading w64devkit (~41MB)...")
     spinner.start()
@@ -208,7 +218,7 @@ def download_and_extract_w64devkit():
     spinner.start()
     try:
         with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-            zip_ref.extractall(user_data_dir)
+            zip_ref.extractall(dest_dir)
         spinner.stop(success=True)
         # Clean up zip
         os.remove(zip_path)
@@ -246,6 +256,7 @@ def check_fast_path():
         return False
 
 def main():
+    is_permanent = False
     enable_ansi_support()
     root_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -264,16 +275,23 @@ def main():
                 pass
         else:
             gui_script = os.path.join(root_dir, "triggercursor", "gui.py")
-            cmd = [sys.executable, gui_script]
+            executable = sys.executable
+            if sys.platform.startswith("win32"):
+                dir_name = os.path.dirname(executable)
+                pythonw_path = os.path.join(dir_name, "pythonw.exe")
+                if os.path.exists(pythonw_path):
+                    executable = pythonw_path
+            cmd = [executable, gui_script]
             try:
                 if sys.platform.startswith("win32"):
                     DETACHED_PROCESS = 0x00000008
+                    CREATE_NO_WINDOW = 0x08000000
                     subprocess.Popen(
                         cmd,
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
                         stdin=subprocess.DEVNULL,
-                        creationflags=DETACHED_PROCESS,
+                        creationflags=DETACHED_PROCESS | CREATE_NO_WINDOW,
                         cwd=root_dir
                     )
                 else:
@@ -326,6 +344,19 @@ def main():
     else:
         dependencies["CMake (Build Tool)"] = ("MISSING", "system-pkg")
 
+    # Check if daemon binary is already built
+    user_data_dir = get_user_data_dir()
+    build_dir = os.path.join(user_data_dir, "build")
+    if sys.platform.startswith("win32"):
+        binary_paths = [
+            os.path.join(build_dir, "Release", "trigger_cursor_daemon.exe"),
+            os.path.join(build_dir, "trigger_cursor_daemon.exe"),
+            os.path.join(build_dir, "Debug", "trigger_cursor_daemon.exe")
+        ]
+    else:
+        binary_paths = [os.path.join(build_dir, "trigger_cursor_daemon")]
+    daemon_exists = any(os.path.exists(bp) for bp in binary_paths)
+
     # Check C++ Compiler
     compiler_path = None
     if sys.platform.startswith("win32"):
@@ -370,6 +401,8 @@ def main():
 
     if compiler_path:
         dependencies["C++ Compiler"] = ("INSTALLED", compiler_path)
+    elif daemon_exists:
+        dependencies["C++ Compiler"] = ("NOT_NEEDED", None)
     else:
         dependencies["C++ Compiler"] = ("MISSING", "system-pkg")
 
@@ -391,6 +424,11 @@ def main():
             detail_str = f"({os.path.basename(detail)})" if detail else ""
             status_text = f"{COLOR_GREEN}✓ INSTALLED {detail_str}{COLOR_RESET}"
             clean_status = f"✓ INSTALLED {detail_str}"
+            padding = 28 - len(clean_status)
+            print(f"│  {name:<39} │ {status_text}{' ' * padding}│")
+        elif status == "NOT_NEEDED":
+            status_text = f"{COLOR_GREEN}✓ NOT REQUIRED (Daemon built){COLOR_RESET}"
+            clean_status = "✓ NOT REQUIRED (Daemon built)"
             padding = 28 - len(clean_status)
             print(f"│  {name:<39} │ {status_text}{' ' * padding}│")
         else:
@@ -427,25 +465,30 @@ def main():
             if "C++ Compiler" in plan_to_install:
                 print(f"{COLOR_BOLD}{COLOR_YELLOW}C++ Compiler is required to compile the native daemon.{COLOR_RESET}")
                 print("Please select a compiler option:")
-                print(f"  {COLOR_GREEN}[1] Auto-Download w64devkit (Ultra-Lightweight) [Recommended]{COLOR_RESET} - Portable GCC/G++ (~41MB download, no admin required)")
-                if winget_available:
-                    print(f"  {COLOR_GREEN}[2] MinGW (winlibs.mingw) via winget{COLOR_RESET} - Standard package manager GCC (~150MB)")
-                    print(f"  {COLOR_GREEN}[3] VS Build Tools (Minimal) via winget{COLOR_RESET} - Official MSVC without extras (~1.5GB)")
-                    print(f"  {COLOR_GREEN}[4] VS Build Tools (Full) via winget{COLOR_RESET} - Official MSVC with all extras (~2.5GB)")
-                    print(f"  {COLOR_GREEN}[5] Skip / Install Manually{COLOR_RESET}")
-                else:
-                    print(f"  {COLOR_GREEN}[2] Skip / Install Manually{COLOR_RESET}")
+                print(f"  {COLOR_GREEN}[1] Auto-Download w64devkit (Ultra-Lightweight) [Recommended]{COLOR_RESET} - Portable GCC/G++ (~41MB download)")
+                print(f"  {COLOR_GREEN}[2] Skip / Install Manually{COLOR_RESET}")
                 print()
                 
-                if winget_available:
-                    choice = input("Select option [1-5] (default: 1 [Recommended]): ").strip()
-                else:
-                    choice = input("Select option [1-2] (default: 1 [Recommended]): ").strip()
-                    if choice == "2":
-                        choice = "5" # Map to Skip / Install Manually
+                choice = input("Select option [1-2] (default: 1 [Recommended]): ").strip()
                 
                 if choice == "" or choice == "1":
-                    success = download_and_extract_w64devkit()
+                    # Prompt the user if they want to keep the compiler permanently
+                    print(f"\n{COLOR_CYAN}Do you want to keep the C++ compiler installed on your system permanently?{COLOR_RESET}")
+                    print("  [y] Yes - Installs permanently under Local Programs (won't be deleted on app uninstall)")
+                    print("  [n] No  - Installs temporarily under AppData (will be deleted on app uninstall) [Default]")
+                    keep_choice = input("Keep compiler permanently? [y/N]: ").strip().lower()
+                    
+                    if keep_choice in ("y", "yes"):
+                        dest_dir = os.path.expandvars(r"%LocalAppData%\Programs")
+                        if not os.path.exists(dest_dir):
+                            dest_dir = os.path.expandvars(r"%UserProfile%\AppData\Local\Programs")
+                        os.makedirs(dest_dir, exist_ok=True)
+                        is_permanent = True
+                    else:
+                        dest_dir = user_data_dir
+                        is_permanent = False
+                        
+                    success = download_and_extract_w64devkit(dest_dir)
                     if success:
                         gxx_path = find_mingw_gxx()
                         if gxx_path:
@@ -456,29 +499,6 @@ def main():
                             compiler_path = gxx_path
                         else:
                             print(f"{COLOR_YELLOW}! compiler could not be located immediately. A terminal restart may be required.{COLOR_RESET}")
-                elif choice == "2":
-                    cmd = ["winget", "install", "--id", "winlibs.mingw", "-h", "--accept-source-agreements", "--accept-package-agreements"]
-                    success = run_command_foreground(cmd, "Installing MinGW via winget")
-                    if success:
-                        gxx_path = find_mingw_gxx()
-                        if gxx_path:
-                            gxx_dir = os.path.dirname(gxx_path)
-                            if gxx_dir not in os.environ["PATH"]:
-                                os.environ["PATH"] += os.pathsep + gxx_dir
-                            print(f"{COLOR_GREEN}✓ MinGW compiler successfully configured at {gxx_path}{COLOR_RESET}")
-                            compiler_path = gxx_path
-                        else:
-                            print(f"{COLOR_YELLOW}! MinGW installed, but compiler could not be located immediately. A terminal restart may be required.{COLOR_RESET}")
-                elif choice == "3":
-                    cmd = ["winget", "install", "--id", "Microsoft.VisualStudio.2022.BuildTools", "--override", 
-                           "--passive --locale en-US --add Microsoft.VisualStudio.Workload.VCTools", 
-                           "--accept-source-agreements", "--accept-package-agreements"]
-                    run_command_foreground(cmd, "Installing Visual Studio Build Tools (Minimal)")
-                elif choice == "4":
-                    cmd = ["winget", "install", "--id", "Microsoft.VisualStudio.2022.BuildTools", "--override", 
-                           "--passive --locale en-US --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended", 
-                           "--accept-source-agreements", "--accept-package-agreements"]
-                    run_command_foreground(cmd, "Installing Visual Studio Build Tools (Full)")
                 else:
                     print("Skipping Compiler setup. C++ compilation might fail.")
 
@@ -562,6 +582,8 @@ def main():
     if not os.path.exists(binary_path):
         print(f"{COLOR_YELLOW}Daemon binary not found. Initiating backend compilation...{COLOR_RESET}")
         try:
+            if os.path.exists(build_dir):
+                shutil.rmtree(build_dir, ignore_errors=True)
             os.makedirs(build_dir, exist_ok=True)
             if sys.platform.startswith("win32"):
                 # If we have g++ (e.g. w64devkit), compile directly to bypass CMake issues on Windows
@@ -601,23 +623,24 @@ def main():
                     
             if built_binary:
                 print(f"{COLOR_GREEN}✓ Native daemon compiled successfully!{COLOR_RESET}")
-                # If w64devkit exists in APPDATA, offer to clean it up
-                w64devkit_dir = os.path.join(user_data_dir, "w64devkit")
-                if os.path.exists(w64devkit_dir):
-                    print()
-                    print(f"{COLOR_YELLOW}Compilation complete. We can clean up the temporary compiler (w64devkit) to save ~100MB of space.{COLOR_RESET}")
-                    choice = input("Do you want to delete the portable compiler toolchain now? [Y/n]: ").strip().lower()
-                    if choice in ("", "y", "yes"):
-                        spinner = Spinner("Cleaning up temporary compiler files...")
-                        spinner.start()
-                        try:
-                            # Remove directory tree
-                            shutil.rmtree(w64devkit_dir)
-                            spinner.stop(success=True)
-                            print(f"{COLOR_GREEN}✓ Cleaned up temporary compiler files.{COLOR_RESET}")
-                        except Exception as e:
-                            spinner.stop(success=False)
-                            print(f"Warning: Could not remove temporary compiler files: {e}")
+                # If w64devkit exists in APPDATA, and it's not permanent, offer to clean it up
+                if not is_permanent:
+                    w64devkit_dir = os.path.join(user_data_dir, "w64devkit")
+                    if os.path.exists(w64devkit_dir):
+                        print()
+                        print(f"{COLOR_YELLOW}Compilation complete. We can clean up the temporary compiler (w64devkit) to save ~100MB of space.{COLOR_RESET}")
+                        choice = input("Do you want to delete the portable compiler toolchain now? [Y/n]: ").strip().lower()
+                        if choice in ("", "y", "yes"):
+                            spinner = Spinner("Cleaning up temporary compiler files...")
+                            spinner.start()
+                            try:
+                                # Remove directory tree
+                                shutil.rmtree(w64devkit_dir)
+                                spinner.stop(success=True)
+                                print(f"{COLOR_GREEN}✓ Cleaned up temporary compiler files.{COLOR_RESET}")
+                            except Exception as e:
+                                spinner.stop(success=False)
+                                print(f"Warning: Could not remove temporary compiler files: {e}")
             else:
                 print(f"\n{COLOR_RED}Error: Failed to compile native C++ backend daemon.{COLOR_RESET}")
                 print("The application cannot run without the compiled backend daemon.")
@@ -652,17 +675,24 @@ def main():
     else:
         print(f"{COLOR_CYAN}Launching GUI in background and exiting terminal...{COLOR_RESET}")
         gui_script = os.path.join(root_dir, "triggercursor", "gui.py")
-        cmd = [sys.executable, gui_script]
+        executable = sys.executable
+        if sys.platform.startswith("win32"):
+            dir_name = os.path.dirname(executable)
+            pythonw_path = os.path.join(dir_name, "pythonw.exe")
+            if os.path.exists(pythonw_path):
+                executable = pythonw_path
+        cmd = [executable, gui_script]
         
         try:
             if sys.platform.startswith("win32"):
                 DETACHED_PROCESS = 0x00000008
+                CREATE_NO_WINDOW = 0x08000000
                 subprocess.Popen(
                     cmd,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                     stdin=subprocess.DEVNULL,
-                    creationflags=DETACHED_PROCESS,
+                    creationflags=DETACHED_PROCESS | CREATE_NO_WINDOW,
                     cwd=root_dir
                 )
             else:

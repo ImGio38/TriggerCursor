@@ -179,6 +179,17 @@ inline void RunHTTPServer(SharedConfig* config) {
                                    "Connection: close\r\n\r\n" + body;
                 send(client_fd, resp.c_str(), static_cast<int>(resp.length()), 0);
             }
+            else if (req.find("GET /shutdown") != std::string::npos) {
+                config->running.store(false);
+                
+                std::string body = "{\"status\":\"shutdown\"}";
+                std::string resp = "HTTP/1.1 200 OK\r\n"
+                                   "Content-Type: application/json\r\n"
+                                   "Access-Control-Allow-Origin: *\r\n"
+                                   "Content-Length: " + std::to_string(body.length()) + "\r\n"
+                                   "Connection: close\r\n\r\n" + body;
+                send(client_fd, resp.c_str(), static_cast<int>(resp.length()), 0);
+            }
             else if (req.find("GET /set_mapping?") != std::string::npos) {
                 int btn_idx = -1;
                 size_t pos_btn = req.find("btn=");

@@ -471,6 +471,10 @@ class TriggerCursorApp(ctk.CTk):
                     # Check if we can find g++ first
                     gxx_path = self.find_mingw_gxx()
                     if gxx_path:
+                        gxx_dir = os.path.dirname(gxx_path)
+                        env = os.environ.copy()
+                        if gxx_dir not in env.get("PATH", ""):
+                            env["PATH"] = gxx_dir + os.pathsep + env.get("PATH", "")
                         cmd = [
                             gxx_path, "-O3", "-std=c++17",
                             os.path.join(self.source_dir, "src", "main.cpp"),
@@ -478,7 +482,7 @@ class TriggerCursorApp(ctk.CTk):
                             "-o", os.path.join(self.build_dir, "trigger_cursor_daemon.exe"),
                             "-lws2_32", "-lwinmm"
                         ]
-                        subprocess.run(cmd, check=True)
+                        subprocess.run(cmd, env=env, check=True)
                         self.binary_path = os.path.join(self.build_dir, "trigger_cursor_daemon.exe")
                     else:
                         subprocess.run(["cmake", "-B", self.build_dir, "-S", self.source_dir], cwd=self.build_dir, check=True)
@@ -501,7 +505,11 @@ class TriggerCursorApp(ctk.CTk):
             os.path.expandvars(r"%ProgramFiles%"),
             os.path.expandvars(r"%ProgramFiles(x86)%"),
             os.path.expandvars(r"%UserProfile%\AppData\Local\Programs"),
-            r"C:\winlibs"
+            r"C:\winlibs",
+            r"C:\mingw64",
+            r"C:\MinGW",
+            r"C:\msys64",
+            r"C:\msys"
         ]
         
         for base in search_bases:
@@ -528,10 +536,14 @@ class TriggerCursorApp(ctk.CTk):
         desktop = os.path.join(os.environ.get("USERPROFILE", ""), "Desktop")
         start_menu = os.path.join(os.environ.get("USERPROFILE", ""), "AppData", "Roaming", "Microsoft", "Windows", "Start Menu", "Programs")
         
-        target_bat = os.path.join(self.source_dir, "run.bat")
-        if not os.path.exists(target_bat):
-            return
-            
+        executable = sys.executable
+        if sys.platform.startswith("win32"):
+            dir_name = os.path.dirname(executable)
+            pythonw_path = os.path.join(dir_name, "pythonw.exe")
+            if os.path.exists(pythonw_path):
+                executable = pythonw_path
+                
+        run_py_path = os.path.join(self.source_dir, "run.py")
         icon_path = os.path.join(self.source_dir, "triggercursor", "icon.ico")
         icon_loc = icon_path if os.path.exists(icon_path) else sys.executable
         
@@ -540,14 +552,20 @@ class TriggerCursorApp(ctk.CTk):
             ps_script = f"""
             $WshShell = New-Object -ComObject WScript.Shell;
             $Shortcut = $WshShell.CreateShortcut('{shortcut_path}');
-            $Shortcut.TargetPath = '{target_bat}';
+            $Shortcut.TargetPath = '{executable}';
+            $Shortcut.Arguments = '"{run_py_path}"';
             $Shortcut.WorkingDirectory = '{self.source_dir}';
             $Shortcut.IconLocation = '{icon_loc}';
             $Shortcut.Save();
             """
             try:
                 if sys.platform.startswith("win32"):
-                    subprocess.run(["powershell", "-Command", ps_script], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    subprocess.run(
+                        ["powershell", "-Command", ps_script],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        creationflags=0x08000000
+                    )
             except Exception as e:
                 print(f"[TriggerCursor] Failed to create shortcut in {folder}: {e}")
 
@@ -590,7 +608,8 @@ Categories=Utility;
         if sys.platform.startswith("win32"):
             try:
                 subprocess.run(["taskkill", "/F", "/IM", "trigger_cursor_daemon.exe"], 
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                               creationflags=0x08000000)
             except Exception:
                 pass
         else:
@@ -605,12 +624,27 @@ Categories=Utility;
             self.daemon_log = open(log_file, "a")
             
             if sys.platform.startswith("win32"):
-                self.daemon_proc = subprocess.Popen(
-                    [self.binary_path],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    cwd=self.user_data_dir
+                import ctypes
+                # Launch the C++ daemon as Administrator (runas verb) to bypass UIPI (control admin apps/games)
+                # SW_HIDE = 0 hides the console window entirely
+                ret = ctypes.windll.shell32.ShellExecuteW(
+                    None,
+                    "runas",
+                    self.binary_path,
+                    None,
+                    self.user_data_dir,
+                    0 # SW_HIDE
                 )
+                if int(ret) > 32:
+                    # Successfully started elevated daemon.
+                    # Create a dummy object with terminate() and wait() to avoid exceptions on exit
+                    class DummyProcess:
+                        def terminate(self): pass
+                        def wait(self): pass
+                    self.daemon_proc = DummyProcess()
+                else:
+                    print(f"[TriggerCursor] UAC elevation denied or failed (code {ret}).")
+                    self.daemon_proc = None
             else:
                 if self.permissions_ok:
                     self.daemon_proc = subprocess.Popen(
@@ -1079,6 +1113,14 @@ Categories=Utility;
         import shlex
         
         # 1. Stop Daemon Process
+        # First send HTTP shutdown request to allow elevated daemon to exit cleanly and release file locks
+        try:
+            req = urllib.request.Request(f"{HOST}/shutdown")
+            with urllib.request.urlopen(req, timeout=0.5) as resp:
+                pass
+        except Exception:
+            pass
+
         if self.daemon_proc:
             print("[TriggerCursor] Terminating background C++ daemon...")
             try:
@@ -1094,7 +1136,8 @@ Categories=Utility;
         if sys.platform.startswith("win32"):
             try:
                 subprocess.run(["taskkill", "/F", "/IM", "trigger_cursor_daemon.exe"], 
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                               creationflags=0x08000000)
             except Exception:
                 pass
         else:
@@ -1113,6 +1156,17 @@ Categories=Utility;
                     print("[TriggerCursor] Removed desktop entry.")
                 except Exception as e:
                     print(f"[TriggerCursor] Failed to remove desktop entry: {e}")
+        elif sys.platform.startswith("win32"):
+            desktop = os.path.join(os.environ.get("USERPROFILE", ""), "Desktop")
+            start_menu = os.path.join(os.environ.get("USERPROFILE", ""), "AppData", "Roaming", "Microsoft", "Windows", "Start Menu", "Programs")
+            for folder, name in [(desktop, "TriggerCursor.lnk"), (start_menu, "TriggerCursor.lnk")]:
+                shortcut_path = os.path.join(folder, name)
+                if os.path.exists(shortcut_path):
+                    try:
+                        os.remove(shortcut_path)
+                        print(f"[TriggerCursor] Removed shortcut in {folder}")
+                    except Exception as e:
+                        print(f"[TriggerCursor] Failed to remove shortcut in {folder}: {e}")
 
         # 3. Remove udev rules on Linux
         if sys.platform.startswith("linux"):
@@ -1332,6 +1386,13 @@ Categories=Utility;
 
     def on_exit(self):
         print("[TriggerCursor] Stopping background C++ daemon...")
+        try:
+            req = urllib.request.Request(f"{HOST}/shutdown")
+            with urllib.request.urlopen(req, timeout=0.5) as resp:
+                pass
+        except Exception:
+            pass
+
         if self.daemon_proc:
             try:
                 self.daemon_proc.terminate()
@@ -1343,7 +1404,8 @@ Categories=Utility;
         if sys.platform.startswith("win32"):
             try:
                 subprocess.run(["taskkill", "/F", "/IM", "trigger_cursor_daemon.exe"], 
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                               creationflags=0x08000000)
             except Exception:
                 pass
         else:
