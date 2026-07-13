@@ -387,7 +387,7 @@ def main():
             if "C++ Compiler" in plan_to_install:
                 print(f"{COLOR_BOLD}{COLOR_YELLOW}C++ Compiler is required to compile the native daemon.{COLOR_RESET}")
                 print("Please select a compiler option:")
-                print(f"  {COLOR_GREEN}[1] Auto-Download w64devkit (Ultra-Lightweight){COLOR_RESET} - Portable GCC/G++ (~41MB download, no admin required, recommended)")
+                print(f"  {COLOR_GREEN}[1] Auto-Download w64devkit (Ultra-Lightweight) [Recommended]{COLOR_RESET} - Portable GCC/G++ (~41MB download, no admin required)")
                 if winget_available:
                     print(f"  {COLOR_GREEN}[2] MinGW (winlibs.mingw) via winget{COLOR_RESET} - Standard package manager GCC (~150MB)")
                     print(f"  {COLOR_GREEN}[3] VS Build Tools (Minimal) via winget{COLOR_RESET} - Official MSVC without extras (~1.5GB)")
@@ -398,9 +398,9 @@ def main():
                 print()
                 
                 if winget_available:
-                    choice = input("Select option [1-5] (default: 1): ").strip()
+                    choice = input("Select option [1-5] (default: 1 [Recommended]): ").strip()
                 else:
-                    choice = input("Select option [1-2] (default: 1): ").strip()
+                    choice = input("Select option [1-2] (default: 1 [Recommended]): ").strip()
                     if choice == "2":
                         choice = "5" # Map to Skip / Install Manually
                 

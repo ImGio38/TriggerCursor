@@ -3,6 +3,7 @@ import os
 import sys
 import subprocess
 import time
+import threading
 import urllib.request
 import urllib.error
 import json
@@ -399,6 +400,8 @@ class TriggerCursorApp(ctk.CTk):
         self.daemon_proc = None
         self.selected_button_idx = 0
         self.hovered_button_idx = -1
+        self._updating_sliders = False
+        self._update_timer = None
         
         # Determine standard directories
         self.package_dir = os.path.dirname(os.path.abspath(__file__))
@@ -508,6 +511,20 @@ Categories=Utility;
             
         print("[TriggerCursor] Starting background C++ daemon...")
         
+        # Clean up any orphaned daemon processes first
+        if sys.platform.startswith("win32"):
+            try:
+                subprocess.run(["taskkill", "/F", "/IM", "trigger_cursor_daemon.exe"], 
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception:
+                pass
+        else:
+            try:
+                subprocess.run(["killall", "-9", "trigger_cursor_daemon"], 
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception:
+                pass
+
         try:
             log_file = os.path.join(self.user_data_dir, "daemon.log")
             self.daemon_log = open(log_file, "a")
@@ -627,10 +644,10 @@ Categories=Utility;
         self.invert_frame = ctk.CTkFrame(self.sliders_card, fg_color="transparent")
         self.invert_frame.pack(fill="x", padx=20, pady=(0, 10))
         
-        self.invert_x_switch = ctk.CTkSwitch(self.invert_frame, text="Invert X Axis", command=self.push_config_updates)
+        self.invert_x_switch = ctk.CTkSwitch(self.invert_frame, text="Invert X Axis", command=self.trigger_config_update)
         self.invert_x_switch.pack(side="left")
         
-        self.invert_y_switch = ctk.CTkSwitch(self.invert_frame, text="Invert Y Axis", command=self.push_config_updates)
+        self.invert_y_switch = ctk.CTkSwitch(self.invert_frame, text="Invert Y Axis", command=self.trigger_config_update)
         self.invert_y_switch.pack(side="right")
 
         # Controller Button Programmer Card
@@ -945,15 +962,23 @@ Categories=Utility;
         release_param = ",".join(release_list) if release_list else "none"
         
         url = f"{HOST}/set_mapping?btn={btn_idx}&press={press_param}&release={release_param}"
-        try:
-            req = urllib.request.Request(url)
-            with urllib.request.urlopen(req, timeout=0.5) as resp:
-                if hasattr(self, "current_mappings") and btn_idx < len(self.current_mappings):
-                    self.current_mappings[btn_idx]["press"] = ",".join(press_list)
-                    self.current_mappings[btn_idx]["release"] = ",".join(release_list)
-                self.update_controller_canvas()
-        except Exception as e:
-            print(f"[TriggerCursor] Failed to save mapping: {e}")
+        
+        def do_save():
+            try:
+                req = urllib.request.Request(url)
+                with urllib.request.urlopen(req, timeout=0.5) as resp:
+                    pass
+                self.after(0, lambda: self.handle_save_success(btn_idx, press_list, release_list))
+            except Exception as e:
+                print(f"[TriggerCursor] Failed to save mapping: {e}")
+                
+        threading.Thread(target=do_save, daemon=True).start()
+
+    def handle_save_success(self, btn_idx, press_list, release_list):
+        if hasattr(self, "current_mappings") and btn_idx < len(self.current_mappings):
+            self.current_mappings[btn_idx]["press"] = ",".join(press_list)
+            self.current_mappings[btn_idx]["release"] = ",".join(release_list)
+        self.update_controller_canvas()
 
     def confirm_uninstall(self):
         confirmed = messagebox.askyesno(
@@ -982,6 +1007,20 @@ Categories=Utility;
                     self.daemon_proc.wait()
             except Exception as e:
                 print(f"[TriggerCursor] Failed to stop daemon: {e}")
+
+        # Force kill any remaining daemons
+        if sys.platform.startswith("win32"):
+            try:
+                subprocess.run(["taskkill", "/F", "/IM", "trigger_cursor_daemon.exe"], 
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception:
+                pass
+        else:
+            try:
+                subprocess.run(["killall", "-9", "trigger_cursor_daemon"], 
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception:
+                pass
 
         # 2. Remove desktop launcher
         if sys.platform.startswith("linux"):
@@ -1032,22 +1071,26 @@ Categories=Utility;
         self.destroy()
 
     def toggle_daemon(self):
-        try:
-            req = urllib.request.Request(f"{HOST}/toggle")
-            with urllib.request.urlopen(req) as resp:
-                data = json.loads(resp.read().decode('utf-8'))
-                self.update_switch_ui(data["enabled"])
-        except Exception:
-            pass
+        def do_toggle():
+            try:
+                req = urllib.request.Request(f"{HOST}/toggle")
+                with urllib.request.urlopen(req, timeout=0.5) as resp:
+                    data = json.loads(resp.read().decode('utf-8'))
+                    self.after(0, lambda: self.update_switch_ui(data["enabled"]))
+            except Exception:
+                pass
+        threading.Thread(target=do_toggle, daemon=True).start()
 
     def refresh_controller(self):
-        try:
-            req = urllib.request.Request(f"{HOST}/refresh")
-            with urllib.request.urlopen(req, timeout=0.5) as resp:
+        def do_refresh():
+            try:
+                req = urllib.request.Request(f"{HOST}/refresh")
+                with urllib.request.urlopen(req, timeout=0.5) as resp:
+                    pass
+            except Exception:
                 pass
-        except Exception:
-            pass
-        self.poll_daemon()
+            self.after(0, self.poll_daemon)
+        threading.Thread(target=do_refresh, daemon=True).start()
 
     def update_switch_ui(self, enabled):
         if enabled:
@@ -1058,6 +1101,9 @@ Categories=Utility;
             self.toggle_switch.deselect()
 
     def on_slider_change(self, val):
+        if hasattr(self, "_updating_sliders") and self._updating_sliders:
+            return
+            
         sens = self.sens_slider.get()
         dz = self.dz_slider.get()
         curve = self.curve_slider.get()
@@ -1068,9 +1114,18 @@ Categories=Utility;
         curve_name = "(Linear)" if curve == 1.0 else ("(Quadratic)" if curve == 2.0 else ("(Cubic)" if curve == 3.0 else ""))
         self.curve_lbl.configure(text=f"Curve Power: {curve:.1f} {curve_name}")
 
-        self.push_config_updates()
+        self.trigger_config_update()
+
+    def trigger_config_update(self, *args):
+        if hasattr(self, "_update_timer") and self._update_timer is not None:
+            try:
+                self.after_cancel(self._update_timer)
+            except Exception:
+                pass
+        self._update_timer = self.after(50, self.push_config_updates)
 
     def push_config_updates(self, *args):
+        self._update_timer = None
         sens = self.sens_slider.get()
         dz = self.dz_slider.get()
         curve = self.curve_slider.get()
@@ -1079,71 +1134,101 @@ Categories=Utility;
         inv_y = 1 if self.invert_y_switch.get() else 0
 
         url = f"{HOST}/set?deadzone={dz:.2f}&sensitivity={sens:.1f}&curve_power={curve:.1f}&invert_x={inv_x}&invert_y={inv_y}"
-        try:
-            req = urllib.request.Request(url)
-            with urllib.request.urlopen(req, timeout=0.1) as resp:
+        
+        def do_update():
+            try:
+                req = urllib.request.Request(url)
+                with urllib.request.urlopen(req, timeout=0.2) as resp:
+                    pass
+            except Exception:
                 pass
-        except Exception:
-            pass
+                
+        threading.Thread(target=do_update, daemon=True).start()
 
     def poll_daemon(self):
+        if hasattr(self, "_polling") and self._polling:
+            return
+        self._polling = True
+
+        def do_poll():
+            try:
+                req = urllib.request.Request(f"{HOST}/status")
+                with urllib.request.urlopen(req, timeout=0.5) as resp:
+                    data = json.loads(resp.read().decode('utf-8'))
+                    self.after(0, lambda: self.handle_poll_response(data))
+            except Exception as e:
+                self.after(0, lambda: self.handle_poll_error(e))
+
+        threading.Thread(target=do_poll, daemon=True).start()
+
+    def handle_poll_response(self, data):
+        self._polling = False
         try:
-            req = urllib.request.Request(f"{HOST}/status")
-            with urllib.request.urlopen(req, timeout=0.5) as resp:
-                data = json.loads(resp.read().decode('utf-8'))
-                
-                self.update_switch_ui(data["enabled"])
-                
-                self.sens_slider.set(data["sensitivity"])
-                self.sens_lbl.configure(text=f"Sensitivity: {data['sensitivity']:.1f}")
-                
-                self.dz_slider.set(data["deadzone"])
-                self.dz_lbl.configure(text=f"Deadzone: {int(data['deadzone']*100)}%")
-                
-                if "curve_power" in data:
-                    self.curve_slider.set(data["curve_power"])
-                    curve = data["curve_power"]
-                    curve_name = "(Linear)" if curve == 1.0 else ("(Quadratic)" if curve == 2.0 else ("(Cubic)" if curve == 3.0 else ""))
-                    self.curve_lbl.configure(text=f"Curve Power: {curve:.1f} {curve_name}")
-                
-                if "invert_x" in data:
-                    if data["invert_x"]:
-                        self.invert_x_switch.select()
-                    else:
-                        self.invert_x_switch.deselect()
-                if "invert_y" in data:
-                    if data["invert_y"]:
-                        self.invert_y_switch.select()
-                    else:
-                        self.invert_y_switch.deselect()
+            self.update_switch_ui(data["enabled"])
+            
+            self._updating_sliders = True
+            
+            self.sens_slider.set(data["sensitivity"])
+            self.sens_lbl.configure(text=f"Sensitivity: {data['sensitivity']:.1f}")
+            
+            self.dz_slider.set(data["deadzone"])
+            self.dz_lbl.configure(text=f"Deadzone: {int(data['deadzone']*100)}%")
+            
+            if "curve_power" in data:
+                self.curve_slider.set(data["curve_power"])
+                curve = data["curve_power"]
+                curve_name = "(Linear)" if curve == 1.0 else ("(Quadratic)" if curve == 2.0 else ("(Cubic)" if curve == 3.0 else ""))
+                self.curve_lbl.configure(text=f"Curve Power: {curve:.1f} {curve_name}")
+            
+            if "invert_x" in data:
+                if data["invert_x"]:
+                    self.invert_x_switch.select()
+                else:
+                    self.invert_x_switch.deselect()
+            if "invert_y" in data:
+                if data["invert_y"]:
+                    self.invert_y_switch.select()
+                else:
+                    self.invert_y_switch.deselect()
+                    
+            self._updating_sliders = False
 
-                if "controller_name" in data and "controller_type" in data:
-                    c_name = data["controller_name"]
-                    c_type = data["controller_type"]
-                    if c_name != "None":
-                        self.controller_info_lbl.configure(
-                            text=f"Controller: {c_name} ({c_type} style)",
-                            text_color="#34d399"
-                        )
-                    else:
-                        self.controller_info_lbl.configure(
-                            text="Controller: No Controller Connected",
-                            text_color="#ef4444"
-                        )
+            if "controller_name" in data and "controller_type" in data:
+                c_name = data["controller_name"]
+                c_type = data["controller_type"]
+                if c_name != "None":
+                    self.controller_info_lbl.configure(
+                        text=f"Controller: {c_name} ({c_type} style)",
+                        text_color="#34d399"
+                    )
+                else:
+                    self.controller_info_lbl.configure(
+                        text="Controller: No Controller Connected",
+                        text_color="#ef4444"
+                    )
 
-                if "mappings" in data:
-                    first_load = not hasattr(self, "current_mappings")
-                    self.current_mappings = data["mappings"]
-                    if first_load:
-                        self.update_programmer_ui_from_current()
+            if "mappings" in data:
+                first_load = not hasattr(self, "current_mappings")
+                self.current_mappings = data["mappings"]
+                if first_load:
+                    self.update_programmer_ui_from_current()
 
-                if hasattr(self, 'warning_frame'):
-                    self.warning_frame.pack_forget()
+            if hasattr(self, 'warning_frame'):
+                self.warning_frame.pack_forget()
         except Exception:
+            pass
+        
+        self.after(2000, self.poll_daemon)
+
+    def handle_poll_error(self, err):
+        self._polling = False
+        try:
             self.status_title.configure(text="Connecting to Daemon...", text_color="#e2e8f0")
             if not self.permissions_ok and hasattr(self, 'warning_frame'):
                 if not self.warning_frame.winfo_manager():
                     self.warning_frame.pack(fill="x", padx=20, pady=(0, 10), before=self.status_card)
+        except Exception:
+            pass
             
         self.after(2000, self.poll_daemon)
 
@@ -1155,6 +1240,21 @@ Categories=Utility;
                 self.daemon_proc.wait()
             except Exception:
                 pass
+                
+        # Force kill to ensure no orphaned daemon process remains on port 8080
+        if sys.platform.startswith("win32"):
+            try:
+                subprocess.run(["taskkill", "/F", "/IM", "trigger_cursor_daemon.exe"], 
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception:
+                pass
+        else:
+            try:
+                subprocess.run(["killall", "-9", "trigger_cursor_daemon"], 
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception:
+                pass
+
         if hasattr(self, "daemon_log"):
             try:
                 self.daemon_log.close()

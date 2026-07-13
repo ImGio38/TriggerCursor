@@ -106,6 +106,17 @@ inline void RunHTTPServer(SharedConfig* config) {
         socket_t client_fd = accept(server_fd, (struct sockaddr*)&client_addr, &addr_len);
         if (invalid_socket(client_fd)) continue;
 
+        // Set a receive timeout to prevent blocking recv indefinitely
+#ifdef _WIN32
+        DWORD timeout_ms = 1000;
+        setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout_ms, sizeof(timeout_ms));
+#else
+        struct timeval tv_timeout;
+        tv_timeout.tv_sec = 1;
+        tv_timeout.tv_usec = 0;
+        setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &tv_timeout, sizeof(tv_timeout));
+#endif
+
         char buffer[4096] = {0};
         int bytes_read = recv(client_fd, buffer, sizeof(buffer) - 1, 0);
         if (bytes_read > 0) {

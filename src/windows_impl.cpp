@@ -175,7 +175,16 @@ int RunWindowsDaemon(SharedConfig& config) {
         XINPUT_STATE state;
         ZeroMemory(&state, sizeof(XINPUT_STATE));
 
-        DWORD result = pXInputGetState(0, &state);
+        DWORD result = ERROR_DEVICE_NOT_CONNECTED;
+        DWORD active_user_idx = 0;
+        for (DWORD i = 0; i < 4; ++i) {
+            result = pXInputGetState(i, &state);
+            if (result == ERROR_SUCCESS) {
+                active_user_idx = i;
+                break;
+            }
+        }
+
         if (result != ERROR_SUCCESS) {
             // Controller disconnected or offline
             if (was_connected) {
@@ -189,7 +198,7 @@ int RunWindowsDaemon(SharedConfig& config) {
         }
 
         if (!was_connected) {
-            std::cout << "[Windows Daemon] Controller connected." << std::endl;
+            std::cout << "[Windows Daemon] Controller connected (User Index: " << active_user_idx << ")." << std::endl;
             config.set_controller("Xbox Controller", "Xbox");
             was_connected = true;
         }
