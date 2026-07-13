@@ -92,7 +92,7 @@ System Verification Plan:
 
 Missing components are resolved automatically with visual spinners and progress loaders (utilizing native package managers: `apt`, `dnf`, or `pacman` on Linux; `winget` and `pip` on Windows).
 
-1. Clone the repository:
+1. Clone the repository (or download and extract the repository ZIP file from GitHub):
    ```bash
    git clone https://github.com/ImGio38/TriggerCursor.git
    cd TriggerCursor
