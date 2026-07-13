@@ -22,6 +22,9 @@ A highly optimized, near-zero overhead controller-to-mouse driver. It features a
 
 Ensure your system has the required compilation tools to build the low-latency C++ backend:
 
+> [!TIP]
+> **Automatic Setup (Zero Friction):** On first launch, the bootstrapper script (`run.sh` on Linux / `run.bat` on Windows) will automatically detect, download, and install any missing dependencies (including Python, Tkinter, CMake, C++ compiler tools, and Python library packages) using a visual installer interface in your terminal. You do not need to install them manually!
+
 ### Linux Compatibility & Distros
 
 TriggerCursor is display-server agnostic (works on both **Wayland** and **X11**) because it emulates hardware at the kernel level using `/dev/uinput`.
@@ -66,12 +69,9 @@ Depending on your distribution, you must install the compilation tools and Pytho
 * CMake
 * Visual Studio with the "Desktop development with C++" workload active
 
-> [!NOTE]
-> **Automatic Setup:** If Python, CMake, or Visual Studio C++ Build Tools are missing, the launcher will automatically attempt to install them for you.
-
 ## How to Run
 
-TriggerCursor features a unified, cross-platform terminal bootstrapper that automatically checks system requirements, installs missing dependencies, compiles the low-overhead C++ backend daemon, and boots the application.
+TriggerCursor features a unified, cross-platform terminal bootstrapper that automatically checks system requirements, installs missing dependencies, compiles the low-overhead C++ backend daemon, and boots the application. This visual terminal installer UI runs on both **Windows** and **Linux**.
 
 ### Visual Installer UI
 On launch, the bootstrapper presents a clear setup plan board:
