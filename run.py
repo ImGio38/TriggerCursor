@@ -106,13 +106,156 @@ def detect_linux_pkg_manager():
         return "pacman"
     return None
 
+def find_mingw_gxx():
+    if shutil.which("g++"):
+        return shutil.which("g++")
+        
+    search_bases = [
+        get_user_data_dir(),
+        os.path.expandvars(r"%LocalAppData%\Microsoft\WinGet\Packages"),
+        os.path.expandvars(r"%ProgramFiles%"),
+        os.path.expandvars(r"%ProgramFiles(x86)%"),
+        os.path.expandvars(r"%UserProfile%\AppData\Local\Programs"),
+        r"C:\winlibs"
+    ]
+    
+    for base in search_bases:
+        if not os.path.exists(base):
+            continue
+        try:
+            for entry in os.scandir(base):
+                if entry.is_dir():
+                    name_lower = entry.name.lower()
+                    if "winlibs" in name_lower or "mingw" in name_lower or "msys" in name_lower or "w64devkit" in name_lower:
+                        for root, dirs, files in os.walk(entry.path):
+                            if "g++.exe" in files:
+                                return os.path.join(root, "g++.exe")
+                            # Don't go too deep to avoid performance issues
+                            rel_path = os.path.relpath(root, entry.path)
+                            depth = len(rel_path.split(os.sep))
+                            if depth > 3:
+                                del dirs[:] # stop recursing this branch
+        except Exception:
+            pass
+    return None
+
+def download_and_extract_w64devkit():
+    import urllib.request
+    import zipfile
+    
+    user_data_dir = get_user_data_dir()
+    zip_path = os.path.join(user_data_dir, "w64devkit.zip")
+    
+    url = "https://github.com/skeeto/w64devkit/releases/download/v2.8.0/w64devkit-2.8.0.zip"
+    
+    spinner = Spinner("Downloading w64devkit (~41MB)...")
+    spinner.start()
+    try:
+        # Use a custom user-agent to avoid GitHub returning 403
+        req = urllib.request.Request(
+            url,
+            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        )
+        with urllib.request.urlopen(req) as response, open(zip_path, 'wb') as out_file:
+            shutil.copyfileobj(response, out_file)
+        spinner.stop(success=True)
+    except Exception as e:
+        spinner.stop(success=False)
+        print(f"{COLOR_RED}Failed to download w64devkit: {e}{COLOR_RESET}")
+        return False
+        
+    spinner = Spinner("Extracting compiler toolchain...")
+    spinner.start()
+    try:
+        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            zip_ref.extractall(user_data_dir)
+        spinner.stop(success=True)
+        # Clean up zip
+        os.remove(zip_path)
+        return True
+    except Exception as e:
+        spinner.stop(success=False)
+        print(f"{COLOR_RED}Failed to extract w64devkit: {e}{COLOR_RESET}")
+        if os.path.exists(zip_path):
+            os.remove(zip_path)
+        return False
+
+def check_fast_path():
+    # Fast path check: if daemon binary exists and packages are installed, we can boot immediately
+    user_data_dir = get_user_data_dir()
+    build_dir = os.path.join(user_data_dir, "build")
+    
+    if sys.platform.startswith("win32"):
+        binary_paths = [
+            os.path.join(build_dir, "Release", "trigger_cursor_daemon.exe"),
+            os.path.join(build_dir, "trigger_cursor_daemon.exe"),
+            os.path.join(build_dir, "Debug", "trigger_cursor_daemon.exe")
+        ]
+    else:
+        binary_paths = [os.path.join(build_dir, "trigger_cursor_daemon")]
+        
+    binary_exists = any(os.path.exists(bp) for bp in binary_paths)
+    if not binary_exists:
+        return False
+        
+    try:
+        import tkinter
+        import customtkinter
+        return True
+    except ImportError:
+        return False
+
 def main():
     enable_ansi_support()
     root_dir = os.path.dirname(os.path.abspath(__file__))
 
-    print(f"{COLOR_BOLD}{COLOR_BLUE}=========================================================={COLOR_RESET}")
-    print(f"{COLOR_BOLD}{COLOR_BLUE}              TriggerCursor System Setup                  {COLOR_RESET}")
-    print(f"{COLOR_BOLD}{COLOR_BLUE}=========================================================={COLOR_RESET}")
+    # Fast path check: launch immediately if everything is already configured and compiled
+    if check_fast_path():
+        # Append root_dir to path so python launcher can find triggercursor package
+        sys.path.insert(0, root_dir)
+        foreground = "--foreground" in sys.argv or "-f" in sys.argv
+        if foreground:
+            sys.argv = [arg for arg in sys.argv if arg not in ("--foreground", "-f")]
+            try:
+                from triggercursor.gui import main as run_app
+                run_app()
+                return
+            except Exception:
+                pass
+        else:
+            gui_script = os.path.join(root_dir, "triggercursor", "gui.py")
+            cmd = [sys.executable, gui_script]
+            try:
+                if sys.platform.startswith("win32"):
+                    DETACHED_PROCESS = 0x00000008
+                    subprocess.Popen(
+                        cmd,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        stdin=subprocess.DEVNULL,
+                        creationflags=DETACHED_PROCESS,
+                        cwd=root_dir
+                    )
+                else:
+                    subprocess.Popen(
+                        cmd,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        stdin=subprocess.DEVNULL,
+                        start_new_session=True,
+                        cwd=root_dir
+                    )
+                return
+            except Exception:
+                pass
+
+    # Fallback to interactive setup with beautiful dashboard
+    print(f"{COLOR_BOLD}{COLOR_BLUE}")
+    print("   ┌┬┐┬─┐┬┌─┐┌─┐┌─┐┬─┐  ┌─┐┬ ┬┬─┐┌─┐┌─┐┬─┐")
+    print("    │ ├┬┘││ ┬│ ┬├┤ ├┬┘  │  │ │├┬┘└─┐│ │├┬┘")
+    print("    ┴ ┴└─┴└─┘└─┘└──┴└─  └─┘└─┘┴└─└─┘└─┘┴└─")
+    print(f"{COLOR_RESET}")
+    print(f"{COLOR_BOLD}{COLOR_CYAN}  System Setup & Dependency Verification{COLOR_RESET}")
     print()
 
     # --- 1. DETERMINE DEPENDENCY STATUS ---
@@ -146,12 +289,20 @@ def main():
     # Check C++ Compiler
     compiler_path = None
     if sys.platform.startswith("win32"):
+        # Auto-discover MinGW first if g++ is not directly in PATH
+        if not shutil.which("g++"):
+            gxx_path = find_mingw_gxx()
+            if gxx_path:
+                gxx_dir = os.path.dirname(gxx_path)
+                if gxx_dir not in os.environ["PATH"]:
+                    os.environ["PATH"] += os.pathsep + gxx_dir
+                    
         if shutil.which("cl"):
-            compiler_path = "MSVC (cl.exe)"
+            compiler_path = shutil.which("cl")
         elif shutil.which("g++"):
-            compiler_path = "MinGW (g++)"
+            compiler_path = shutil.which("g++")
         elif shutil.which("clang++"):
-            compiler_path = "Clang (clang++)"
+            compiler_path = shutil.which("clang++")
         else:
             # Check vswhere
             vswhere_paths = [
@@ -167,15 +318,15 @@ def main():
                             "-property", "installationPath"
                         ], capture_output=True, text=True)
                         if res.returncode == 0 and res.stdout.strip():
-                            compiler_path = f"MSVC Tools (VS at {res.stdout.strip()})"
+                            compiler_path = os.path.join(res.stdout.strip(), "VC", "Tools", "MSVC")
                             break
                     except Exception:
                         pass
     else:
         if shutil.which("g++"):
-            compiler_path = "GCC (g++)"
+            compiler_path = shutil.which("g++")
         elif shutil.which("clang++"):
-            compiler_path = "Clang (clang++)"
+            compiler_path = shutil.which("clang++")
 
     if compiler_path:
         dependencies["C++ Compiler"] = ("INSTALLED", compiler_path)
@@ -190,19 +341,25 @@ def main():
         dependencies["CustomTkinter (Python Package)"] = ("MISSING", "pip-pkg")
 
     # --- 2. DISPLAY STATUS GRID ---
-    print(f"{COLOR_BOLD}System Verification Plan:{COLOR_RESET}")
-    print("-" * 65)
+    print(f"┌────────────────────────────────────────────────────────────────────────┐")
+    print(f"│                       SYSTEM VERIFICATION PLAN                         │")
+    print(f"├─────────────────────────────────────────┬──────────────────────────────┤")
     plan_to_install = []
     
     for name, (status, detail) in dependencies.items():
         if status == "INSTALLED":
-            detail_str = f" ({detail})" if detail else ""
-            print(f"  {COLOR_GREEN}[✓] {name:<30}{COLOR_RESET} : INSTALLED{detail_str}")
+            detail_str = f"({os.path.basename(detail)})" if detail else ""
+            status_text = f"{COLOR_GREEN}✓ INSTALLED {detail_str}{COLOR_RESET}"
+            clean_status = f"✓ INSTALLED {detail_str}"
+            padding = 28 - len(clean_status)
+            print(f"│  {name:<39} │ {status_text}{' ' * padding}│")
         else:
-            print(f"  {COLOR_YELLOW}[-] {name:<30}{COLOR_RESET} : {COLOR_RED}MISSING{COLOR_RESET}")
+            status_text = f"{COLOR_RED}✗ MISSING{COLOR_RESET}"
+            padding = 28 - len("✗ MISSING")
+            print(f"│  {name:<39} │ {status_text}{' ' * padding}│")
             plan_to_install.append(name)
             
-    print("-" * 65)
+    print(f"└─────────────────────────────────────────┴──────────────────────────────┘")
     print()
 
     # --- 3. APPLY PLAN IF NEEDED ---
@@ -227,17 +384,61 @@ def main():
                             os.environ["PATH"] += os.pathsep + p
                             break
 
-            if "C++ Compiler" in plan_to_install and winget_available:
-                print(f"{COLOR_YELLOW}Visual Studio Build Tools workload 'Desktop development with C++' is required.{COLOR_RESET}")
-                print("This is a ~2GB download and requires administrator privileges.")
-                choice = input("Do you want to install VS Build Tools now? [Y/n]: ").strip().lower()
-                if choice in ("", "y", "yes"):
+            if "C++ Compiler" in plan_to_install:
+                print(f"{COLOR_BOLD}{COLOR_YELLOW}C++ Compiler is required to compile the native daemon.{COLOR_RESET}")
+                print("Please select a compiler option:")
+                print(f"  {COLOR_GREEN}[1] Auto-Download w64devkit (Ultra-Lightweight){COLOR_RESET} - Portable GCC/G++ (~41MB download, no admin required, recommended)")
+                if winget_available:
+                    print(f"  {COLOR_GREEN}[2] MinGW (winlibs.mingw) via winget{COLOR_RESET} - Standard package manager GCC (~150MB)")
+                    print(f"  {COLOR_GREEN}[3] VS Build Tools (Minimal) via winget{COLOR_RESET} - Official MSVC without extras (~1.5GB)")
+                    print(f"  {COLOR_GREEN}[4] VS Build Tools (Full) via winget{COLOR_RESET} - Official MSVC with all extras (~2.5GB)")
+                    print(f"  {COLOR_GREEN}[5] Skip / Install Manually{COLOR_RESET}")
+                else:
+                    print(f"  {COLOR_GREEN}[2] Skip / Install Manually{COLOR_RESET}")
+                print()
+                
+                if winget_available:
+                    choice = input("Select option [1-5] (default: 1): ").strip()
+                else:
+                    choice = input("Select option [1-2] (default: 1): ").strip()
+                    if choice == "2":
+                        choice = "5" # Map to Skip / Install Manually
+                
+                if choice == "" or choice == "1":
+                    success = download_and_extract_w64devkit()
+                    if success:
+                        gxx_path = find_mingw_gxx()
+                        if gxx_path:
+                            gxx_dir = os.path.dirname(gxx_path)
+                            if gxx_dir not in os.environ["PATH"]:
+                                os.environ["PATH"] += os.pathsep + gxx_dir
+                            print(f"{COLOR_GREEN}✓ w64devkit compiler successfully configured at {gxx_path}{COLOR_RESET}")
+                        else:
+                            print(f"{COLOR_YELLOW}! compiler could not be located immediately. A terminal restart may be required.{COLOR_RESET}")
+                elif choice == "2":
+                    cmd = ["winget", "install", "--id", "winlibs.mingw", "-h", "--accept-source-agreements", "--accept-package-agreements"]
+                    success = run_command_foreground(cmd, "Installing MinGW via winget")
+                    if success:
+                        gxx_path = find_mingw_gxx()
+                        if gxx_path:
+                            gxx_dir = os.path.dirname(gxx_path)
+                            if gxx_dir not in os.environ["PATH"]:
+                                os.environ["PATH"] += os.pathsep + gxx_dir
+                            print(f"{COLOR_GREEN}✓ MinGW compiler successfully configured at {gxx_path}{COLOR_RESET}")
+                        else:
+                            print(f"{COLOR_YELLOW}! MinGW installed, but compiler could not be located immediately. A terminal restart may be required.{COLOR_RESET}")
+                elif choice == "3":
+                    cmd = ["winget", "install", "--id", "Microsoft.VisualStudio.2022.BuildTools", "--override", 
+                           "--passive --locale en-US --add Microsoft.VisualStudio.Workload.VCTools", 
+                           "--accept-source-agreements", "--accept-package-agreements"]
+                    run_command_foreground(cmd, "Installing Visual Studio Build Tools (Minimal)")
+                elif choice == "4":
                     cmd = ["winget", "install", "--id", "Microsoft.VisualStudio.2022.BuildTools", "--override", 
                            "--passive --locale en-US --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended", 
                            "--accept-source-agreements", "--accept-package-agreements"]
-                    run_command_foreground(cmd, "Installing Visual Studio Build Tools")
+                    run_command_foreground(cmd, "Installing Visual Studio Build Tools (Full)")
                 else:
-                    print("Skipping Build Tools. C++ compilation might fail.")
+                    print("Skipping Compiler setup. C++ compilation might fail.")
 
         # Linux Installations
         else:
@@ -321,8 +522,15 @@ def main():
         try:
             os.makedirs(build_dir, exist_ok=True)
             if sys.platform.startswith("win32"):
+                # Determine generator and compiler configuration
+                generator_args = []
+                if compiler_path and "g++" in compiler_path.lower():
+                    generator_args = ["-G", "MinGW Makefiles", "-DCMAKE_BUILD_TYPE=Release"]
+                else:
+                    generator_args = ["-DCMAKE_BUILD_TYPE=Release"]
+                
                 # Run configure
-                success, _ = run_command_with_spinner(["cmake", "-B", build_dir, "-S", root_dir], "Configuring CMake build environment", cwd=build_dir)
+                success, _ = run_command_with_spinner(["cmake"] + generator_args + ["-B", build_dir, "-S", root_dir], "Configuring CMake build environment", cwd=build_dir)
                 # Run build
                 if success:
                     run_command_with_spinner(["cmake", "--build", build_dir, "--config", "Release"], "Compiling native C++ backend (Release)", cwd=build_dir)
@@ -332,6 +540,38 @@ def main():
                 # Run build
                 if success:
                     run_command_with_spinner(["cmake", "--build", build_dir], "Compiling native C++ backend (Release)", cwd=build_dir)
+            
+            # Verify build success and offer to clean up portable compiler
+            built_binary = None
+            for bp in [
+                os.path.join(build_dir, "Release", "trigger_cursor_daemon.exe"),
+                os.path.join(build_dir, "trigger_cursor_daemon.exe"),
+                os.path.join(build_dir, "Debug", "trigger_cursor_daemon.exe"),
+                os.path.join(build_dir, "trigger_cursor_daemon")
+            ]:
+                if os.path.exists(bp):
+                    built_binary = bp
+                    break
+                    
+            if built_binary:
+                print(f"{COLOR_GREEN}✓ Native daemon compiled successfully!{COLOR_RESET}")
+                # If w64devkit exists in APPDATA, offer to clean it up
+                w64devkit_dir = os.path.join(user_data_dir, "w64devkit")
+                if os.path.exists(w64devkit_dir):
+                    print()
+                    print(f"{COLOR_YELLOW}Compilation complete. We can clean up the temporary compiler (w64devkit) to save ~100MB of space.{COLOR_RESET}")
+                    choice = input("Do you want to delete the portable compiler toolchain now? [Y/n]: ").strip().lower()
+                    if choice in ("", "y", "yes"):
+                        spinner = Spinner("Cleaning up temporary compiler files...")
+                        spinner.start()
+                        try:
+                            # Remove directory tree
+                            shutil.rmtree(w64devkit_dir)
+                            spinner.stop(success=True)
+                            print(f"{COLOR_GREEN}✓ Cleaned up temporary compiler files.{COLOR_RESET}")
+                        except Exception as e:
+                            spinner.stop(success=False)
+                            print(f"Warning: Could not remove temporary compiler files: {e}")
         except Exception as e:
             print(f"{COLOR_RED}Warning: Backend compilation failed: {e}{COLOR_RESET}")
             print("Launcher will proceed, but daemon operations might fail.")

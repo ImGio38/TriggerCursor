@@ -1,12 +1,7 @@
 @echo off
 setlocal enabledelayedexpansion
 
-echo ==========================================================
-echo   TriggerCursor Python Bootstrapper for Windows
-echo ==========================================================
-echo.
-
-REM --- CHECK AND BOOTSTRAP PYTHON ---
+REM --- CHECK AND BOOTSTRAP PYTHON FIRST (SILENTLY) ---
 python --version >nul 2>&1
 if %errorlevel% equ 0 (
     goto run_py
@@ -34,12 +29,15 @@ for /d %%d in ("%ProgramFiles(x86)%\Python*") do (
 )
 
 if defined PYTHON_FOUND (
-    echo Found Python installation at: !PYTHON_PATH!
-    echo Adding Python to temporary path for this session.
     set "PATH=!PYTHON_PATH!;!PYTHON_PATH!\Scripts;%PATH%"
     goto run_py
 )
 
+REM --- ONLY SHOW BOOTSTRAPPER UI IF PYTHON IS MISSING ---
+echo ==========================================================
+echo   TriggerCursor Python Bootstrapper for Windows
+echo ==========================================================
+echo.
 echo Python is not installed. We will attempt to install Python 3.
 where winget >nul 2>&1
 if %errorlevel% equ 0 (
