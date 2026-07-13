@@ -5,6 +5,7 @@
 
 #include <iostream>
 #include <windows.h>
+#include <mmsystem.h>
 #include <xinput.h>
 #include <vector>
 
@@ -171,21 +172,151 @@ int RunWindowsDaemon(SharedConfig& config) {
             Sleep(config.poll_rate_ms.load());
         }
 
-        // Query gamepad state
-        XINPUT_STATE state;
-        ZeroMemory(&state, sizeof(XINPUT_STATE));
+        // 1. Query XInput first
+        XINPUT_STATE xstate;
+        ZeroMemory(&xstate, sizeof(XINPUT_STATE));
 
-        DWORD result = ERROR_DEVICE_NOT_CONNECTED;
+        DWORD xinput_result = ERROR_DEVICE_NOT_CONNECTED;
         DWORD active_user_idx = 0;
         for (DWORD i = 0; i < 4; ++i) {
-            result = pXInputGetState(i, &state);
-            if (result == ERROR_SUCCESS) {
+            xinput_result = pXInputGetState(i, &xstate);
+            if (xinput_result == ERROR_SUCCESS) {
                 active_user_idx = i;
                 break;
             }
         }
 
-        if (result != ERROR_SUCCESS) {
+        bool current_states[16] = {false};
+        float norm_x = 0.0f;
+        float norm_y = 0.0f;
+        bool device_connected = false;
+        std::string current_name = "None";
+        std::string current_type = "None";
+
+        if (xinput_result == ERROR_SUCCESS) {
+            device_connected = true;
+            current_name = "Xbox Controller (XInput)";
+            current_type = "Xbox";
+
+            current_states[0] = (xstate.Gamepad.wButtons & XINPUT_GAMEPAD_A) != 0;
+            current_states[1] = (xstate.Gamepad.wButtons & XINPUT_GAMEPAD_B) != 0;
+            current_states[2] = (xstate.Gamepad.wButtons & XINPUT_GAMEPAD_X) != 0;
+            current_states[3] = (xstate.Gamepad.wButtons & XINPUT_GAMEPAD_Y) != 0;
+            current_states[4] = (xstate.Gamepad.wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER) != 0;
+            current_states[5] = (xstate.Gamepad.wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER) != 0;
+            current_states[6] = xstate.Gamepad.bLeftTrigger > XINPUT_GAMEPAD_TRIGGER_THRESHOLD;
+            current_states[7] = xstate.Gamepad.bRightTrigger > XINPUT_GAMEPAD_TRIGGER_THRESHOLD;
+            current_states[8] = (xstate.Gamepad.wButtons & XINPUT_GAMEPAD_LEFT_THUMB) != 0;
+            current_states[9] = (xstate.Gamepad.wButtons & XINPUT_GAMEPAD_RIGHT_THUMB) != 0;
+            current_states[10] = (xstate.Gamepad.wButtons & XINPUT_GAMEPAD_BACK) != 0;
+            current_states[11] = (xstate.Gamepad.wButtons & XINPUT_GAMEPAD_START) != 0;
+            current_states[12] = (xstate.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_UP) != 0;
+            current_states[13] = (xstate.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_DOWN) != 0;
+            current_states[14] = (xstate.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_LEFT) != 0;
+            current_states[15] = (xstate.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_RIGHT) != 0;
+
+            norm_x = static_cast<float>(xstate.Gamepad.sThumbLX) / 32768.0f;
+            norm_y = static_cast<float>(xstate.Gamepad.sThumbLY) / 32768.0f;
+            
+            if (norm_x > 1.0f) norm_x = 1.0f;
+            else if (norm_x < -1.0f) norm_x = -1.0f;
+            if (norm_y > 1.0f) norm_y = 1.0f;
+            else if (norm_y < -1.0f) norm_y = -1.0f;
+        } 
+        else {
+            // 2. Query WinMM Joysticks
+            UINT num_devs = joyGetNumDevs();
+            JOYINFOEX joy_info;
+            std::memset(&joy_info, 0, sizeof(joy_info));
+            joy_info.dwSize = sizeof(JOYINFOEX);
+            joy_info.dwFlags = JOY_RETURNALL;
+
+            for (UINT i = 0; i < 16 && i < num_devs; ++i) {
+                JOYCAPSW caps;
+                if (joyGetDevCapsW(i, &caps, sizeof(caps)) == JOYERR_NOERROR) {
+                    if (joyGetPosEx(i, &joy_info) == JOYERR_NOERROR) {
+                        device_connected = true;
+                        
+                        // Convert WCHAR product name to UTF-8
+                        char name_mb[256] = {0};
+                        WideCharToMultiByte(CP_UTF8, 0, caps.szPname, -1, name_mb, sizeof(name_mb) - 1, NULL, NULL);
+                        current_name = name_mb;
+                        
+                        // Detect layout type
+                        current_type = "Xbox";
+                        std::string lower_name = current_name;
+                        for (char &c : lower_name) c = std::tolower(c);
+                        
+                        bool is_playstation = false;
+                        if (lower_name.find("playstation") != std::string::npos || 
+                            lower_name.find("sony") != std::string::npos || 
+                            lower_name.find("dualshock") != std::string::npos || 
+                            lower_name.find("dualsense") != std::string::npos || 
+                            lower_name.find("ps4") != std::string::npos || 
+                            lower_name.find("ps5") != std::string::npos ||
+                            lower_name.find("wireless controller") != std::string::npos) {
+                            current_type = "PlayStation";
+                            is_playstation = true;
+                        } else if (lower_name.find("nintendo") != std::string::npos || 
+                                   lower_name.find("switch") != std::string::npos) {
+                            current_type = "Nintendo";
+                        }
+
+                        // Map buttons
+                        if (is_playstation) {
+                            current_states[0] = (joy_info.dwButtons & JOY_BUTTON2) != 0; // Cross (South)
+                            current_states[1] = (joy_info.dwButtons & JOY_BUTTON3) != 0; // Circle (East)
+                            current_states[2] = (joy_info.dwButtons & JOY_BUTTON1) != 0; // Square (West)
+                            current_states[3] = (joy_info.dwButtons & JOY_BUTTON4) != 0; // Triangle (North)
+                            current_states[4] = (joy_info.dwButtons & JOY_BUTTON5) != 0; // L1 (LB)
+                            current_states[5] = (joy_info.dwButtons & JOY_BUTTON6) != 0; // R1 (RB)
+                            current_states[6] = (joy_info.dwButtons & JOY_BUTTON7) != 0; // L2 (LT)
+                            current_states[7] = (joy_info.dwButtons & JOY_BUTTON8) != 0; // R2 (RT)
+                            current_states[8] = (joy_info.dwButtons & JOY_BUTTON11) != 0; // L3 (LS)
+                            current_states[9] = (joy_info.dwButtons & JOY_BUTTON12) != 0; // R3 (RS)
+                            current_states[10] = (joy_info.dwButtons & JOY_BUTTON9) != 0; // Share (Back)
+                            current_states[11] = (joy_info.dwButtons & JOY_BUTTON10) != 0; // Options (Start)
+                        } else {
+                            // Generic / Xbox-like fallback
+                            current_states[0] = (joy_info.dwButtons & JOY_BUTTON1) != 0; 
+                            current_states[1] = (joy_info.dwButtons & JOY_BUTTON2) != 0; 
+                            current_states[2] = (joy_info.dwButtons & JOY_BUTTON3) != 0; 
+                            current_states[3] = (joy_info.dwButtons & JOY_BUTTON4) != 0; 
+                            current_states[4] = (joy_info.dwButtons & JOY_BUTTON5) != 0; 
+                            current_states[5] = (joy_info.dwButtons & JOY_BUTTON6) != 0; 
+                            current_states[6] = (joy_info.dwButtons & JOY_BUTTON7) != 0; 
+                            current_states[7] = (joy_info.dwButtons & JOY_BUTTON8) != 0; 
+                            current_states[8] = (joy_info.dwButtons & JOY_BUTTON9) != 0; 
+                            current_states[9] = (joy_info.dwButtons & JOY_BUTTON10) != 0; 
+                            current_states[10] = (joy_info.dwButtons & JOY_BUTTON11) != 0; 
+                            current_states[11] = (joy_info.dwButtons & JOY_BUTTON12) != 0; 
+                        }
+
+                        // Map POV Hat to D-pad
+                        if (joy_info.dwPOV != JOY_POVCENTERED) {
+                            current_states[12] = (joy_info.dwPOV >= 31500 || joy_info.dwPOV <= 4500);  // Up
+                            current_states[13] = (joy_info.dwPOV >= 13500 && joy_info.dwPOV <= 22500); // Down
+                            current_states[14] = (joy_info.dwPOV >= 22500 && joy_info.dwPOV <= 31500); // Left
+                            current_states[15] = (joy_info.dwPOV >= 4500 && joy_info.dwPOV <= 13500);   // Right
+                        }
+
+                        // Map left stick axes (WinMM dwXpos/dwYpos range from 0 to 65535, center is 32768)
+                        norm_x = (static_cast<float>(joy_info.dwXpos) - 32768.0f) / 32768.0f;
+                        // Invert Y because up is 0 and down is 65535 in WinMM
+                        norm_y = -(static_cast<float>(joy_info.dwYpos) - 32768.0f) / 32768.0f;
+
+                        if (norm_x > 1.0f) norm_x = 1.0f;
+                        else if (norm_x < -1.0f) norm_x = -1.0f;
+                        if (norm_y > 1.0f) norm_y = 1.0f;
+                        else if (norm_y < -1.0f) norm_y = -1.0f;
+
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (!device_connected) {
             // Controller disconnected or offline
             if (was_connected) {
                 std::cout << "[Windows Daemon] Controller disconnected." << std::endl;
@@ -198,29 +329,10 @@ int RunWindowsDaemon(SharedConfig& config) {
         }
 
         if (!was_connected) {
-            std::cout << "[Windows Daemon] Controller connected (User Index: " << active_user_idx << ")." << std::endl;
-            config.set_controller("Xbox Controller", "Xbox");
+            std::cout << "[Windows Daemon] Controller connected: " << current_name << " (" << current_type << ")." << std::endl;
+            config.set_controller(current_name, current_type);
             was_connected = true;
         }
-
-        // Read all 16 button states
-        bool current_states[16];
-        current_states[0] = (state.Gamepad.wButtons & XINPUT_GAMEPAD_A) != 0;
-        current_states[1] = (state.Gamepad.wButtons & XINPUT_GAMEPAD_B) != 0;
-        current_states[2] = (state.Gamepad.wButtons & XINPUT_GAMEPAD_X) != 0;
-        current_states[3] = (state.Gamepad.wButtons & XINPUT_GAMEPAD_Y) != 0;
-        current_states[4] = (state.Gamepad.wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER) != 0;
-        current_states[5] = (state.Gamepad.wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER) != 0;
-        current_states[6] = state.Gamepad.bLeftTrigger > XINPUT_GAMEPAD_TRIGGER_THRESHOLD;
-        current_states[7] = state.Gamepad.bRightTrigger > XINPUT_GAMEPAD_TRIGGER_THRESHOLD;
-        current_states[8] = (state.Gamepad.wButtons & XINPUT_GAMEPAD_LEFT_THUMB) != 0;
-        current_states[9] = (state.Gamepad.wButtons & XINPUT_GAMEPAD_RIGHT_THUMB) != 0;
-        current_states[10] = (state.Gamepad.wButtons & XINPUT_GAMEPAD_BACK) != 0;
-        current_states[11] = (state.Gamepad.wButtons & XINPUT_GAMEPAD_START) != 0;
-        current_states[12] = (state.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_UP) != 0;
-        current_states[13] = (state.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_DOWN) != 0;
-        current_states[14] = (state.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_LEFT) != 0;
-        current_states[15] = (state.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_RIGHT) != 0;
 
         // Process edge-triggered button actions
         for (int i = 0; i < 16; ++i) {
@@ -238,16 +350,6 @@ int RunWindowsDaemon(SharedConfig& config) {
                 last_states[i] = current_states[i];
             }
         }
-
-        // Normalize axes: XInput values range from -32768 to 32767
-        float norm_x = static_cast<float>(state.Gamepad.sThumbLX) / 32768.0f;
-        float norm_y = static_cast<float>(state.Gamepad.sThumbLY) / 32768.0f;
-
-        // Ensure clamps
-        if (norm_x > 1.0f) norm_x = 1.0f;
-        else if (norm_x < -1.0f) norm_x = -1.0f;
-        if (norm_y > 1.0f) norm_y = 1.0f;
-        else if (norm_y < -1.0f) norm_y = -1.0f;
 
         // Process physics (only if enabled)
         if (config.enabled.load()) {
